@@ -1,0 +1,103 @@
+name: Claude Agent (issue → PR) (reusable)
+
+# 자율 작업 루프의 실행부 (docs/adr/0007-autonomous-agent-loop.md).
+# 'agent' 라벨이 붙은 이슈를 CLAUDE.md의 "작업 루프"대로 구현해서 develop 대상 PR을 연다.
+# develop 머지는 CI check + auto-merge, develop→main은 사람 게이트(여기서 안 함).
+#
+# 전제(리포 설정 — 코드 아님):
+#  - Claude GitHub App 설치 + secrets.CLAUDE_CODE_OAUTH_TOKEN (claude /install-github-app)
+#  - secrets.AGENT_WORKFLOW_TOKEN: repo+workflow 스코프 PAT (2026-09-05, docs/adr/0007
+#    "알려진 제약"). Claude GitHub App 설치 토큰엔 workflows 스코프가 없어
+#    `.github/workflows/*` 파일 커밋이 거부됐다 — 이 PAT로 그 제약을 없앤다.
+#    secrets.GITHUB_TOKEN은 절대 안 쓴다(그 토큰 커밋엔 GitHub이 CI를 안 돌림).
+#  - Settings → General → Allow auto-merge
+#  - Settings → Branches → develop 보호, Require status checks = check
+#  - 'agent' 라벨 존재
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+
+concurrency:
+  group: claude-agent-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    if: github.event.label.name == 'agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    # 암호화된 .env(repo에 커밋됨) 복호화 — 러너의 npm run check / dev DB 접근 (docs/adr/0009)
+    env:
+      DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
+    steps:
+      # 이슈 이벤트의 기본 체크아웃은 default 브랜치(main)라 작업 기준이 어긋난다 →
+      # develop을 직접 체크아웃한다. 여기서 에이전트가 그 위에 작업 브랜치를 딴다.
+      # token을 AGENT_WORKFLOW_TOKEN(workflow 스코프 PAT)으로 지정 - 기본 GITHUB_TOKEN엔
+      # 그 스코프가 없어 이 체크아웃 이후 커밋에서 .github/workflows/* 변경이 거부된다.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: develop
+          token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+
+      # npm run check 를 러너에서 바로 돌릴 수 있게 준비 (ci.yml check job과 동일 구성)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+
+      # github_token엔 AGENT_WORKFLOW_TOKEN(workflow 스코프 PAT)을 넘긴다 - secrets.GITHUB_TOKEN을
+      # 넘기면 그걸로 만든 커밋에는 GitHub이 CI를 안 돌리므로(문서 명시) 그건 절대 쓰지 않는다.
+      # 이 PAT는 사람 계정 소유라 그 제약이 없고, workflow 스코프가 있어 .github/workflows/*도 커밋 가능.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          # 2026-09-05: 이 job이 결정론적으로 즉사하는데(첫 턴에서 is_error, duration 384ms,
+          # total_cost_usd 0, modelUsage {} — 모델 호출 자체가 안 됨) 로그가 가려져 원인이 안 보인다.
+          # 액션이 안내하는 대로 전체 출력을 켠다. 같은 토큰을 쓰는 claude-review.yml은 정상
+          # 동작하므로 토큰/구독 문제는 아니고, 실패는 #119·#120이 main에 올라간 직후부터 시작됐다.
+          # 원인이 밝혀지면 이 옵션은 되돌린다(출력에 프롬프트·환경이 그대로 남는다).
+          show_full_output: true
+          prompt: |
+            GitHub 이슈 #${{ github.event.issue.number }} 를 구현한다. 이슈 제목·본문이 요구사항이다.
+
+            반드시 저장소 루트의 CLAUDE.md "🌿 작업 루프"를 그대로 따른다:
+            1. `develop`이 이미 체크아웃돼 있다. **여기서 네가 직접 작업 브랜치를 딴다**:
+               `git switch -c <type>/<slug>` (예: `fix/eslint-errors`). 액션은 브랜치를 만들어 주지
+               않는다 — 2026-09-05 실측에서 에이전트가 `develop` 위에 그대로 앉아 커밋할 곳을
+               못 찾고 턴을 소진했다. remote는 workflow 스코프 PAT로 인증돼 있어 push까지 된다.
+               **`develop`/`main`에는 절대 커밋·push하지 않는다.**
+            2. **`prisma/` 스키마·마이그레이션 변경이 필요하면** 코드를 고치지 말고, 이슈에
+               짧은 구현 계획만 코멘트로 남기고 종료한다 (마이그레이션은 사전 계획 게이트).
+            3. 작게 구현한다. `npm run check` (typecheck + vitest + prisma validate)가 통과해야 한다.
+            4. 순수 함수(파서·변환·`shared/lib` 헬퍼)를 새로 만들거나 고치면 옆에 `*.test.ts`도 같이.
+            5. 기능/로직 변경이면 `docs/BUSINESS_LOGIC.md`에 먼저 기록하고 같은 브랜치에 포함한다.
+            6. **작업이 눈에 띄게 진전되면 그때그때 커밋하고 `git push -u origin <branch>`로 일찍 올린다.**
+               마지막에 몰아서 하지 않는다 — 턴 상한에 걸려도 브랜치가 남아 있어야 이어서 할 수 있다
+               (실측: 22개 에러를 0으로 다 고쳐놓고 커밋 전에 잘려 전부 날아갔다).
+               그 다음 `gh pr create --base develop` 로 PR을 연다. 본문에 `Closes #${{ github.event.issue.number }}`,
+               목표·완료조건·`npm run check` 결과를 적는다.
+            7. **위험 구간을 건드렸으면** (`auth` · `api/admin` · `scripts/` 배치 · `package.json` 의존성)
+               → `gh pr edit <n> --add-label do-not-merge` 하고, PR에 "위험 구간 — diff 리뷰 후
+               사람이 수동 머지" 코멘트를 단다. **위험 구간이 아니면** 라벨 없이 그대로 둔다
+               (CI `check` 초록 시 `auto-merge.yml`이 자동 머지). 직접 `gh pr merge`는 부르지 않는다.
+            8. `develop`→`main` PR은 절대 만들지 않는다. 운영 반영은 사람이 한다.
+
+            네가 만지는 파일의 ESLint 에러는 0으로 유지한다(전체 lint는 CI에서 비차단).
+          claude_args: >-
+            --max-turns 150
+            --model claude-sonnet-5
+            --allowedTools "Edit,Write,Read,Bash,Glob,Grep"

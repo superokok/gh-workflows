@@ -1,0 +1,154 @@
+name: Claude Fix (red build → 수정 커밋) (reusable)
+
+# 자가 치유 게이트 (docs/adr/0010-merge-gates.md).
+# develop 대상 PR의 기계적 게이트(`check` / `Vercel` 빌드 / `smoke`)가 빨간불이면
+# 사람에게 넘기지 않고 **작성자인 에이전트가 직접 고친다** — PR 작성자가 자기 빨간불을
+# 고친다는 원칙 그대로다(여기선 작성자가 에이전트).
+#
+# 자동 수정하지 않는 것:
+#   - 리뷰 고위험 finding → 판단이 필요하다. claude-review.yml이 do-not-merge를 붙이고 사람이 본다
+#   - 시도 2회를 넘긴 실패 → 무한 재시도는 표준이 아니다. do-not-merge를 붙여 사람에게 인계
+#   - lint 실패 → CI에서 비차단(continue-on-error)이라 워크플로우가 빨간불이 안 된다
+#
+# 라벨(do-not-merge)이 붙어 있어도 수정은 한다 — 라벨은 "머지를 막는" 신호지 "고치지 말라"가
+# 아니다. 위험 경로 PR도 빨간불은 고쳐두는 편이 사람이 리뷰하기 좋다.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+
+concurrency:
+  group: claude-fix-${{ github.event.workflow_run.head_sha || github.event.sha }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'status' && github.event.context == 'Vercel' &&
+       (github.event.state == 'failure' || github.event.state == 'error'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read      # 실패한 run의 로그를 읽는다
+    env:
+      DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
+    steps:
+      # ── 고칠 대상인지 판정 (PR 찾기 + 시도 횟수 상한) ────────────────────────
+      - name: 대상 판정
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.event.sha }}
+        run: |
+          set -euo pipefail
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
+          num=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+                  --jq '[.[] | select(.base.ref=="develop" and .state=="open")] | (.[0].number // empty)')
+          if [ -z "$num" ]; then echo "develop 대상 열린 PR 없음 — 스킵"; exit 0; fi
+
+          info=$(gh pr view "$num" --repo "$REPO" --json headRefName,headRefOid,isDraft)
+          head=$(jq -r .headRefOid  <<<"$info")
+          ref=$(jq -r .headRefName  <<<"$info")
+          draft=$(jq -r .isDraft    <<<"$info")
+          if [ "$head" != "$SHA" ]; then echo "더 새 커밋이 있음 — 낡은 이벤트, 스킵"; exit 0; fi
+          if [ "$draft" = "true" ]; then echo "draft — 스킵"; exit 0; fi
+
+          # 시도 상한 2회. 코멘트 마커로 센다(PR 단위 누적)
+          tries=$(gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' \
+                    | grep -cF '<!-- claude-fix:attempt -->' || true)
+          echo "지금까지 자동 수정 시도: $tries"
+
+          if [ "$tries" -ge 2 ]; then
+            gh pr edit "$num" --repo "$REPO" --add-label do-not-merge || true
+            if ! gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' \
+                 | grep -qF '<!-- claude-fix:gave-up -->'; then
+              printf '%s\n\n%s\n' \
+                '🛑 **자동 수정 2회 실패** — 사람이 봐야 합니다. 실패한 워크플로우 로그를 확인해주세요.' \
+                '<!-- claude-fix:gave-up -->' \
+                | gh pr comment "$num" --repo "$REPO" --body-file -
+            fi
+            echo "상한 초과 — 사람에게 인계"; exit 0
+          fi
+
+          printf '%s\n\n%s\n' \
+            "🔧 빨간불을 감지해 자동 수정을 시작합니다 ($((tries+1))/2)." \
+            '<!-- claude-fix:attempt -->' \
+            | gh pr comment "$num" --repo "$REPO" --body-file -
+
+          {
+            echo "run=true"
+            echo "pr=$num"
+            echo "ref=$ref"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.target.outputs.run == 'true'
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.target.outputs.ref }}
+          # 수정 커밋을 PR 브랜치에 push한다. .github/workflows/*도 고칠 수 있어야 하므로
+          # workflow 스코프 PAT (docs/adr/0007 "알려진 제약").
+          token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        if: steps.target.outputs.run == 'true'
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: npm ci
+        if: steps.target.outputs.run == 'true'
+      - run: npx prisma generate
+        if: steps.target.outputs.run == 'true'
+
+      - uses: anthropics/claude-code-action@v1
+        if: steps.target.outputs.run == 'true'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          prompt: |
+            PR #${{ steps.target.outputs.pr }} 의 게이트가 실패했다. 원인을 찾아 고친다.
+            PR 브랜치(`${{ steps.target.outputs.ref }}`)가 이미 체크아웃돼 있고 `npm ci`도 끝났다.
+
+            실패 신호: ${{ github.event_name == 'status' && 'Vercel 빌드 실패' || format('워크플로우 "{0}" 실패 (run id {1})', github.event.workflow_run.name, github.event.workflow_run.id) }}
+
+            1. **원인부터 읽는다. 추측하지 않는다.**
+               - 워크플로우 실패면: `gh run view ${{ github.event.workflow_run.id }} --log-failed`
+               - Vercel 빌드 실패면: 러너에서 `npm run build`로 직접 재현한다
+                 (`npm run check`의 `tsc --noEmit`은 `next build`를 대신하지 못한다 — RSC 경계,
+                 동적 라우트 타입 등은 빌드에서만 터진다)
+               - Preview Smoke 실패면: 하이드레이션 실패나 pageerror다. 실패한 run의 로그에 남은
+                 JSON에서 어떤 에러인지 보고, 그 화면을 렌더하는 컴포넌트를 고친다
+
+            2. **이 PR이 만든 회귀만 최소 범위로 고친다.** 원인과 무관한 리팩터링·정리를 끼워
+               넣지 않는다. 기존 부채라 이 PR 소관이 아니면 고치지 말고 3번으로 간다.
+
+            3. **고칠 수 없으면 억지로 고치지 않는다.** 원인이 코드 밖(시크릿 누락, 외부 서비스
+               장애, 인프라)이거나 판단이 필요하면:
+                 gh pr edit ${{ steps.target.outputs.pr }} --add-label do-not-merge
+                 gh pr comment ${{ steps.target.outputs.pr }} --body "<원인과 필요한 조치>"
+               테스트를 지우거나 `skip` 처리하거나, 타입을 `any`로 덮거나, 게이트 자체를
+               느슨하게 만드는 방식으로 초록불을 만드는 건 **금지**다.
+
+            4. 고쳤으면 `npm run check` 통과를 확인하고 **같은 브랜치에 커밋해서 push**한다
+               (`git switch`/`checkout`은 하지 않는다 — 이미 올바른 브랜치다). 커밋 메시지는
+               `fix: <무엇을 왜>` 한 줄 + 무엇이 실패했는지. push하면 게이트가 다시 돌고,
+               초록이면 `auto-merge.yml`이 머지한다. `gh pr merge`는 부르지 않는다.
+
+            5. 무엇을 고쳤는지 PR에 코멘트로 1~3줄 남긴다.
+          claude_args: >-
+            --max-turns 40
+            --model claude-sonnet-5
+            --allowedTools "Edit,Write,Read,Bash,Glob,Grep"

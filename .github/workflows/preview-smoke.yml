@@ -1,0 +1,84 @@
+name: Preview Smoke (reusable)
+
+# 런타임 검증 게이트 (docs/adr/0010-merge-gates.md).
+# `check`(타입·단위테스트)도 Vercel 빌드도 "화면이 실제로 뜨는지"는 검증하지 못한다 —
+# 하이드레이션 실패는 SSR HTML이 멀쩡해도 인터랙션이 죽는다.
+# Vercel Preview 배포가 끝나면 그 URL을 대상으로 Playwright E2E 스모크를 돌린다.
+#
+# 판정 (e2e/fixtures.ts):
+#   - 단언 실패 / pageerror(잡히지 않은 예외) → 실패(빨간불)
+#   - console.error → 리포트에 첨부만. 기존 부채가 남아 있어 아직 차단하지 않는다
+#     (2026-09-05 기준 운영 홈에도 404 리소스 콘솔 에러가 1건 있다)
+#
+# 실패하면 `claude-fix.yml`이 받아서 고친다 — 사람에게 바로 오지 않는다.
+#
+# 전제(리포 설정 — 코드 아님):
+#   Vercel Preview·staging은 Deployment Protection이 켜져 있어 로그인 없이 못 연다.
+#   Vercel → Project Settings → Deployment Protection → **Protection Bypass for Automation**
+#   에서 시크릿을 만들고 GitHub Secret `VERCEL_AUTOMATION_BYPASS_SECRET`으로 등록하면 동작한다.
+#   시크릿이 없으면 이 job은 조용히 통과한다(파이프라인을 막지 않는다).
+#
+# deployment_status 트리거라 이 파일도 default 브랜치(main)에 있는 버전이 동작한다.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+
+jobs:
+  smoke:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      startsWith(github.event.deployment.environment, 'Preview')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.deployment.sha }}
+
+      - name: Bypass 시크릿 확인
+        id: guard
+        env:
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          if [ -z "$BYPASS" ]; then
+            echo "VERCEL_AUTOMATION_BYPASS_SECRET 미설정 — 스모크 스킵" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.run == 'true'
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: npm ci
+        if: steps.guard.outputs.run == 'true'
+      # Pixel 7 프로젝트도 chromium 엔진이라 브라우저는 하나면 된다
+      - run: npx playwright install --with-deps chromium
+        if: steps.guard.outputs.run == 'true'
+
+      - name: E2E 스모크
+        if: steps.guard.outputs.run == 'true'
+        env:
+          E2E_BASE_URL: ${{ github.event.deployment_status.environment_url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          echo "대상: $E2E_BASE_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+          npx playwright test
+
+      # 실패했을 때 원인을 보려면 리포트·트레이스·스크린샷·비디오가 필요하다.
+      # claude-fix.yml이 `gh run view --log-failed`로 읽는 로그와 별개로, 사람이 열어볼 몫.
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.guard.outputs.run == 'true'
+        with:
+          name: playwright-report-${{ github.event.deployment.sha }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore

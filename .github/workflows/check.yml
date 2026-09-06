@@ -1,0 +1,75 @@
+name: Check (reusable)
+
+# 빠른 검증 게이트. DB 없이 수초 안에 끝나는 것만 본다 —
+# 빌드/프리뷰는 Vercel이 PR마다 이미 돌리므로 여기서 중복하지 않는다.
+#
+# 각 단계는 커맨드 문자열 입력이다. 빈 문자열("")을 넘기면 그 단계를 건너뛴다
+# (예: Prisma를 안 쓰는 프로젝트는 prepare/schema-validate를 "").
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+      install:
+        type: string
+        default: "npm ci"
+      prepare:
+        description: 설치 직후 준비 단계 (코드 생성 등). 빈 문자열이면 건너뜀
+        type: string
+        default: "npx prisma generate"
+      typecheck:
+        type: string
+        default: "npm run typecheck"
+      test:
+        type: string
+        default: "npm run test"
+      schema-validate:
+        type: string
+        default: "npx prisma validate"
+      lint:
+        description: 별도 job으로 돈다. 차단 게이트로 쓸지는 호출부가 필요한 체크에 넣느냐로 정한다
+        type: string
+        default: "npm run lint"
+    secrets:
+      DOTENV_PRIVATE_KEY:
+        description: 커밋된 암호화 .env를 복호화(dotenvx). 안 쓰면 생략
+        required: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: ${{ inputs.install }}
+      - name: Prepare
+        if: inputs.prepare != ''
+        run: ${{ inputs.prepare }}
+      - name: Typecheck
+        if: inputs.typecheck != ''
+        run: ${{ inputs.typecheck }}
+      - name: Unit tests
+        if: inputs.test != ''
+        run: ${{ inputs.test }}
+      - name: Schema validate
+        if: inputs.schema-validate != ''
+        run: ${{ inputs.schema-validate }}
+
+  lint:
+    if: inputs.lint != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: ${{ inputs.install }}
+      - run: ${{ inputs.lint }}

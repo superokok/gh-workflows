@@ -1,0 +1,96 @@
+name: Release PR (develop → main) (reusable)
+
+# `develop`이 `main`보다 앞서면 운영 반영 PR을 **항상 열어두고** 최신으로 유지한다.
+#
+# 패턴: release-please / changesets와 같은 "항상 열린 릴리스 PR". PR은 잔소리가 아니라
+# **대시보드**다 — 지금 배포하면 뭐가 나가는지 항상 볼 수 있고, 머지하는 순간이 곧 릴리스다.
+#
+# 왜 자동화하는가 (2026-09-05): CLAUDE.md 루프 7번은 "Claude는 준비되면 develop→main PR을
+# 만들고"인데, "준비되면"을 판단하는 주체가 Claude고 **Claude는 세션이 돌 때만 존재한다.**
+# 그래서 develop에 변경이 쌓여도 사용자가 세션에서 먼저 말하기 전까지 아무 일도 안 일어났다.
+#
+# 이 워크플로우는 **PR을 열기만 한다.** 머지는 여전히 사람이 한다(ADR 0003·0008의 사람 게이트).
+#
+# ── 이 워크플로우는 알림을 보내지 않는다 (2026-09-06) ─────────────────────────
+# PR 생성/갱신은 무음이다 — GitHub은 PR 본문·제목 수정이나 커밋 추가에 알림을 보내지 않고,
+# PR 자체도 AGENT_WORKFLOW_TOKEN(사용자 계정 PAT)으로 만들어 "자기 자신의 행동"이라 알림이
+# 애초에 안 간다.
+#
+# 정기 리마인더(주간 cron)를 넣었다가 뺐다. 아무 사건도 없는데 도착하는 알림은 무시당한다 —
+# 사용자 본인이 "받아도 무시할 것 같다"고 했고 그 판단이 맞다. **"지금 배포할 때인가"는
+# 시스템이 계산할 수 없다**(배치가 완결됐는지, 지켜볼 시간이 있는지, 위험한지 — 전부 사람
+# 판단이다). 그래서 찌르지 않고, 판단하고 싶어질 때 한 클릭 거리에 최신 상태로 놓아둔다.
+# release-please/changesets의 원래 동작이 이것이다.
+#
+# 누적 신호는 **이미 읽고 있는 [AGENT-MERGED] 메일**이 준다 — 그 코멘트에 "운영에 안 나간
+# 변경 N건"이 들어간다(auto-merge.yml / after-merge.yml). 새 알림 채널을 만들지 않고
+# 이미 열어보는 메일에 정보를 얹는 쪽이 무시당하지 않는다.
+#
+# PR 생성에 PAT를 쓰는 이유는 따로 있다: secrets.GITHUB_TOKEN으로 만든 PR에는 GitHub이
+# 워크플로우를 트리거하지 않아 `check`가 안 돌고, ADR 0010의 "develop→main은 check 초록 +
+# 사람" 게이트가 빈 껍데기가 된다(ADR 0007의 알려진 제약과 같은 이유).
+
+on:
+  workflow_call:
+
+concurrency:
+  group: release-pr
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+
+      - name: 릴리스 PR 생성/갱신 (알림 없음)
+        id: upsert
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin main develop --quiet
+
+          ahead=$(git rev-list --count origin/main..origin/develop)
+          echo "ahead=$ahead" >> "$GITHUB_OUTPUT"
+
+          if [ "$ahead" -eq 0 ]; then
+            echo "develop이 main과 같음 — 릴리스할 것 없음"
+            echo "pr=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "develop이 main보다 $ahead 커밋 앞섬"
+
+          # 본문은 파일로 만든다 - 커밋 제목에 백틱/따옴표가 섞여도 셸이 해석하지 않게.
+          # 본문에 [AGENT-ACTION-REQUIRED] 태그를 넣지 않는다 - 이 PR은 알림을 유발하지
+          # 않으므로(위 참고) 태그를 넣어봐야 메일은 안 오고 Gmail 필터만 헷갈린다.
+          {
+            printf '%s\n\n' '`develop` → `main` 운영 반영입니다. **머지하면 즉시 운영 배포 + DB 마이그레이션이 돕니다.**'
+            printf '%s\n\n' '머지 전에 [staging.kitchen-tempo.com](https://staging.kitchen-tempo.com)에서 화면을 확인해주세요 — 로그인·admin 흐름도 여기서 됩니다.'
+            printf '## 포함된 변경 (%s건)\n\n' "$ahead"
+            git log --format='- %s' origin/main..origin/develop
+            printf '\n---\n\n%s\n' '이 PR은 `release-pr.yml`이 자동으로 열고 갱신합니다(갱신에는 알림이 가지 않습니다). 머지는 사람이 합니다.'
+          } > /tmp/release-body.md
+
+          title="release: develop → main (${ahead}건)"
+
+          existing=$(gh pr list --repo "$REPO" --base main --head develop --state open \
+                       --json number --jq '(.[0].number // empty)')
+
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --repo "$REPO" --title "$title" --body-file /tmp/release-body.md
+            echo "기존 릴리스 PR #$existing 갱신"
+            echo "pr=$existing" >> "$GITHUB_OUTPUT"
+          else
+            gh pr create --repo "$REPO" --base main --head develop \
+              --title "$title" --body-file /tmp/release-body.md
+            num=$(gh pr list --repo "$REPO" --base main --head develop --state open \
+                    --json number --jq '(.[0].number // empty)')
+            echo "릴리스 PR #$num 생성"
+            echo "pr=$num" >> "$GITHUB_OUTPUT"
+          fi

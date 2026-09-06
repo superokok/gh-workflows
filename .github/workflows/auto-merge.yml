@@ -1,0 +1,195 @@
+name: Auto-merge to develop (reusable)
+
+# develop 대상 PR의 머지 게이트 (docs/adr/0010-merge-gates.md).
+# GitHub Free 프라이빗 repo는 네이티브 auto-merge/브랜치 보호가 제한적이라(ADR 0008)
+# 여기서 모든 게이트를 직접 확인하고 squash 머지한다.
+#
+# 게이트 (전부 통과해야 머지):
+#   1. 위험 경로 하드 게이트 — 변경 파일 경로를 직접 검사. LLM의 자기신고에 의존하지 않는다
+#   2. `check`  (ci.yml)          — typecheck + vitest + prisma validate
+#   3. `review` (claude-review.yml) — 2차 AI 리뷰가 **완료**됐을 것. 고위험 finding이면
+#      리뷰가 do-not-merge 라벨을 붙이므로 그게 곧 차단이 된다
+#   4. `Vercel` 커밋 status        — 운영과 같은 빌드가 성공했을 것 (CI에 build를 중복하지 않음, ADR 0002)
+#   5. draft 아님 / do-not-merge 라벨 없음 / 충돌 없음
+#
+# 이벤트 기반: CI·Claude Review 완료와 Vercel status 도착 때마다 깨어나 전부 초록인지
+# 본다. 마지막에 도착한 신호가 머지를 수행한다 — 러너에서 폴링 대기하지 않는다.
+#
+# - base=main(develop→main) PR은 대상 아님 — 사람 게이트(ADR 0003).
+# - lint는 비차단이라 보지 않는다.
+# - workflow_run/status 트리거라 이 파일은 default 브랜치(main)에 있는 버전이 동작한다.
+#   → 이 파일 수정은 develop→main 릴리스 후에 효력이 생긴다.
+
+on:
+  workflow_call:
+    inputs:
+      risk-paths:
+        description: |
+          위험 경로 정규식(ERE). 변경 파일이 하나라도 걸리면 자동 머지를 멈추고 do-not-merge
+          라벨과 코멘트를 남겨 사람 머지로 넘긴다. 프로젝트마다 다르므로 필수 입력이다.
+        type: string
+        required: true
+
+permissions:
+  contents: write        # squash 머지 + 브랜치 삭제
+  pull-requests: write   # gh pr merge / edit / comment
+  issues: write          # 라벨 부착, 머지 후 연결된 이슈 close
+  checks: read           # head SHA의 check-run 조회
+  statuses: read         # Vercel 커밋 status 조회
+
+concurrency:
+  group: auto-merge-${{ github.event.workflow_run.head_sha || github.event.sha }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'status' && github.event.context == 'Vercel')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge develop PR when every gate is green
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.event.sha }}
+          RISK_RE: ${{ inputs.risk-paths }}
+        run: |
+          set -euo pipefail
+
+          echo "이벤트=${GITHUB_EVENT_NAME}  SHA=$SHA"
+
+          # ── 이 커밋에 달린 develop 대상 열린 PR 찾기 ────────────────────────────
+          # (브랜치 이름이 아니라 SHA로 찾는다 — status 이벤트엔 브랜치가 없을 수 있음)
+          num=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+                  --jq '[.[] | select(.base.ref=="develop" and .state=="open")] | (.[0].number // empty)')
+          if [ -z "$num" ]; then echo "develop 대상 열린 PR 없음 — 스킵"; exit 0; fi
+
+          info=$(gh pr view "$num" --repo "$REPO" \
+                   --json number,isDraft,mergeable,labels,body,headRefOid,headRefName,files)
+          head=$(jq -r .headRefOid   <<<"$info")
+          draft=$(jq -r .isDraft     <<<"$info")
+          mergeable=$(jq -r .mergeable <<<"$info")
+          body=$(jq -r .body         <<<"$info")
+          blocked=$(jq -r '([.labels[].name] | index("do-not-merge")) != null' <<<"$info")
+          echo "PR #$num  head=$head  draft=$draft  mergeable=$mergeable  do-not-merge=$blocked"
+
+          if [ "$head" != "$SHA" ];        then echo "더 새 커밋이 있음 — 낡은 이벤트, 스킵"; exit 0; fi
+          if [ "$draft" = "true" ];        then echo "draft — 스킵"; exit 0; fi
+          if [ "$blocked" = "true" ];      then echo "do-not-merge 라벨 — 스킵(사람이 머지)"; exit 0; fi
+          if [ "$mergeable" = "CONFLICTING" ]; then echo "충돌 — 스킵(작업 브랜치에서 해소 필요)"; exit 0; fi
+
+          # 같은 마커의 코멘트가 이미 있으면 다시 달지 않는다(이벤트마다 재실행되므로)
+          comment_once() {
+            local marker="$1" text="$2"
+            if gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' \
+                 | grep -qF "$marker"; then return 0; fi
+            printf '%s\n\n%s\n' "$text" "$marker" | gh pr comment "$num" --repo "$REPO" --body-file -
+          }
+
+          # ── 게이트 1. 위험 경로 하드 게이트 ──────────────────────────────────────
+          # 에이전트가 do-not-merge 라벨을 스스로 붙이길 기대하지 않고, 변경 파일 경로를
+          # 여기서 결정론적으로 검사한다. 걸리면 라벨을 붙여 사람 머지로 넘긴다.
+          risky=$(jq -r '.files[].path' <<<"$info" | grep -E "$RISK_RE" || true)
+          if [ -n "$risky" ]; then
+            echo "위험 경로 감지:"; echo "$risky"
+            gh pr edit "$num" --repo "$REPO" --add-label do-not-merge || true
+            comment_once "<!-- gate:risk-path -->" \
+              "🔴 **머지 필요** \`[AGENT-ACTION-REQUIRED]\`
+
+          위험 경로 파일이 바뀌어 자동 머지를 멈췄습니다. diff를 보고 직접 Merge하거나 \`do-not-merge\` 라벨을 떼주세요.
+
+          \`\`\`
+          $risky
+          \`\`\`"
+            exit 0
+          fi
+
+          # ── 게이트 2~4. check / review / Vercel ────────────────────────────────
+          # 재사용 워크플로우로 부르면 check-run 이름이 "호출한 잡 / 불린 잡"이 된다(예: check / check).
+          # 그래서 정확히 같은 이름과 "/ 이름"으로 끝나는 것을 모두 본다 — 이게 없으면 게이트가
+          # 영원히 missing으로 남아 아무것도 머지되지 않는다.
+          conclusion_of() {  # 같은 이름의 check-run이 여러 번 돌았으면 가장 최근 것
+            gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
+              --jq "[.check_runs[] | select(.name==\"$1\" or (.name | endswith(\"/ $1\")))] | sort_by(.started_at) | (last // {}) | (.conclusion // (if (.status // \"\") == \"\" then \"missing\" else \"pending\" end))"
+          }
+          check=$(conclusion_of check)
+          review=$(conclusion_of review)
+          vercel=$(gh api "repos/$REPO/commits/$SHA/status" \
+                     --jq '[.statuses[] | select(.context=="Vercel")] | sort_by(.updated_at) | (last // {}) | (.state // "missing")')
+          echo "게이트: check=$check  review=$review  Vercel=$vercel"
+
+          case "$check" in
+            success) ;;
+            pending|missing) echo "check 대기 중 — 스킵(끝나면 다시 깨어남)"; exit 0 ;;
+            *) echo "check 실패($check) — 머지 안 함"; exit 0 ;;
+          esac
+
+          case "$review" in
+            success|skipped|neutral) ;;
+            pending|missing) echo "Claude Review 대기 중 — 스킵(끝나면 다시 깨어남)"; exit 0 ;;
+            *)
+              comment_once "<!-- gate:review-failed -->" \
+                "⚠️ **Claude Review 실행이 실패**($review)해서 자동 머지를 멈췄습니다. Actions에서 재실행하면 자동으로 이어집니다."
+              echo "review 실패($review) — 머지 안 함"; exit 0 ;;
+          esac
+
+          case "$vercel" in
+            success) ;;
+            pending|missing) echo "Vercel 빌드 대기 중 — 스킵(끝나면 다시 깨어남)"; exit 0 ;;
+            *)
+              comment_once "<!-- gate:vercel-failed -->" \
+                "⚠️ **Vercel 빌드 실패**($vercel) — 자동 머지를 멈췄습니다. \`npm run check\`는 \`next build\`를 대신하지 못하니 빌드 로그를 확인해주세요."
+              echo "Vercel 실패($vercel) — 머지 안 함"; exit 0 ;;
+          esac
+
+          # 리뷰가 방금 do-not-merge를 붙였을 수 있으니 머지 직전에 라벨을 한 번 더 본다
+          blocked=$(gh pr view "$num" --repo "$REPO" --json labels \
+                      --jq '([.labels[].name] | index("do-not-merge")) != null')
+          if [ "$blocked" = "true" ]; then echo "do-not-merge 라벨(리뷰가 부착) — 스킵"; exit 0; fi
+
+          headref=$(jq -r .headRefName <<<"$info")
+
+          gh pr merge "$num" --repo "$REPO" --squash --delete-branch
+          echo "merged #$num"
+
+          # ── 머지 완료 알림([AGENT-MERGED] 태그 -> Gmail 필터) ──────────────────────
+          # after-merge.yml에도 같은 잡(merged-notice)이 있는데, **여기서도 해야 한다.**
+          # GITHUB_TOKEN으로 머지하면 pull_request:closed 이벤트가 다른 워크플로우를 깨우지
+          # 않아서(플랫폼 공통 제약, ADR 0007) 자동 머지 경로에서는 after-merge.yml이 아예
+          # 안 돈다 — 2026-09-06 실측: 사람이 머지한 #147·#150은 실행 이력이 있고, 자동
+          # 머지된 #148·#149는 없다. 그대로 두면 "머지 완료" 메일이 흔한 경로(자동 머지)에서만
+          # 안 오는, 정반대로 뒤집힌 알림이 된다.
+          # 사람이 머지하면 after-merge.yml 쪽이 도므로, 양쪽 모두 이미 붙은 태그를 확인하고
+          # 중복으로 달지 않는다(이 파일의 이슈 close 중복과 같은 방어적 이중화).
+          if ! gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' \
+               | grep -qF '[AGENT-MERGED]'; then
+            # 운영에 안 나간 누적 건수를 이 메일에 얹는다. 릴리스는 별도 알림을 보내지 않으므로
+            # (release-pr.yml — 정기 리마인더는 무시당해서 뺐다), "쌓이고 있다"는 신호는
+            # 사용자가 이미 열어보는 이 메일이 유일하게 전달한다.
+            unreleased=$(gh api "repos/$REPO/compare/main...develop" --jq '.ahead_by' 2>/dev/null || echo "")
+            pending=""
+            if [ -n "$unreleased" ] && [ "$unreleased" != "0" ]; then
+              pending="운영에 안 나간 변경 **${unreleased}건** — 배포는 develop→main 릴리스 PR에서."
+            else
+              pending="운영 반영은 develop→main 릴리스에서 따로 진행합니다."
+            fi
+
+            printf '%s\n\n%s\n\n%s\n' \
+              "✅ **머지 완료** \`[AGENT-MERGED]\`" \
+              "\`$headref\` → \`develop\`" \
+              "$pending" \
+              | gh pr comment "$num" --repo "$REPO" --body-file -
+          fi
+
+          # develop 머지는 default 브랜치가 아니라 GitHub이 "Closes #N"으로 이슈를 안 닫는다.
+          # PR 본문에서 close 키워드 + 이슈 번호를 뽑아 직접 닫는다(운영 반영은 별개).
+          issues=$(printf '%s' "$body" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' \
+                     | grep -oE '[0-9]+' | sort -u || true)
+          for i in $issues; do
+            echo "closing #$i (PR #$num develop 머지됨)"
+            gh issue close "$i" --repo "$REPO" \
+              --comment "develop에 반영됨 (PR #$num). 운영 반영은 develop→main 릴리스에서." || true
+          done

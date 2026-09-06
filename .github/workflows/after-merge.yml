@@ -1,0 +1,150 @@
+name: After merge (issue close · branch cleanup) (reusable)
+
+# develop 대상 PR이 머지된 뒤의 뒷정리. **머지 주체(auto-merge / 사람)와 무관하게** 돈다.
+#
+# 왜 별도 워크플로우인가 (2026-09-05):
+# 두 뒷정리가 원래 auto-merge.yml 안에만 있었다(이슈 close, --delete-branch). 그래서
+# **자동 머지된 PR만** 정리되고, 사람이 UI에서 머지한 PR은 이슈가 열린 채로, 브랜치가
+# 남은 채로 방치됐다 — 그런데 사람이 머지하는 건 정확히 위험 경로 PR(auth·api/admin·
+# scripts·워크플로우)이라, 가장 중요한 작업일수록 뒷정리가 안 되는 구조였다.
+# 실측: 이슈 #110·#116이 PR #141·#142 머지 후에도 OPEN, 브랜치 3개가 잔류.
+#
+# repo 설정 `delete_branch_on_merge`를 켜는 방법도 있으나 **쓰면 안 된다** — 그 설정은
+# 머지된 PR의 head 브랜치를 무조건 지워서, `develop`→`main` 릴리스 PR을 머지하는 순간
+# **`develop` 자체가 삭제된다**(2026-09-05 실제로 겪고 복구함). 여기서 base=develop인
+# PR만, 그리고 develop/main은 이름으로도 한 번 더 막고 지운다.
+#
+# GitHub이 이슈를 알아서 안 닫아주는 이유: close 키워드 자동 처리는 **default 브랜치(main)로
+# 머지될 때만** 동작한다. 이 저장소의 작업 머지 대상은 develop이라 해당되지 않는다.
+#
+# auto-merge.yml에도 같은 두 로직이 남아 있는데 의도적이다 — 이미 닫힌 이슈를 닫거나
+# 이미 없는 브랜치를 지우는 건 무해하고(no-op), 어느 한쪽이 안 돌아도 방치되지 않는다.
+
+on:
+  workflow_call:
+
+jobs:
+  # 머지 완료를 Gmail로 알리는 유일한 지점(2026-09-05).
+  #
+  # 사용자는 자기 계정으로 PR을 열기 때문에 "author"로 구독돼, GitHub Watch 설정을 낮춰도
+  # 자기 PR의 모든 활동(리뷰 인라인 코멘트·CI 코멘트 등) 메일을 받는다. 그래서 "알림 종류를
+  # 줄이는" 건 GitHub 설정만으로는 안 되고, **Gmail 필터가 걸 수 있는 눈에 보이는 태그**가
+  # 본문에 있어야 한다. HTML 주석(`<!-- ... -->`)은 렌더링에서 사라져 메일 본문에 안 나오므로
+  # 마커로 쓸 수 없다.
+  #
+  # 태그는 두 개뿐이고, 이 둘에만 붙인다:
+  #   [AGENT-ACTION-REQUIRED] — 사람이 직접 머지해야 함 (auto-merge.yml 위험 경로 게이트,
+  #                          그리고 Claude가 여는 develop→main 릴리스 PR 본문)
+  #   [AGENT-MERGED]          — 머지 완료 (이 잡)
+  # CI 빨간불·리뷰 실패는 태그를 붙이지 않는다 — 그건 Claude가 처리할 몫이라 사용자를 부르지 않는다.
+  merged-notice:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: 머지 완료 코멘트(Gmail 알림용 태그 포함)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          # auto-merge.yml도 머지 직후 같은 태그를 단다. 이 워크플로우는 **사람이 머지했을 때만**
+          # 도는 게 실측 결과다(GITHUB_TOKEN이 만든 pull_request:closed는 워크플로우를 안 깨움,
+          # ADR 0007) — 그래도 양쪽이 겹칠 가능성을 대비해 이미 붙었으면 건너뛴다.
+          if gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' \
+               | grep -qF '[AGENT-MERGED]'; then
+            echo "이미 [AGENT-MERGED] 코멘트가 있음 — 스킵"
+            exit 0
+          fi
+
+          if [ "$BASE" = "main" ]; then
+            detail="운영(main)에 반영됐습니다. 배포와 DB 마이그레이션이 이어서 돕니다."
+          else
+            # 운영에 안 나간 누적 건수를 이 메일에 얹는다(auto-merge.yml과 동일한 이유):
+            # 릴리스 PR은 알림을 보내지 않으므로, "쌓이고 있다"는 신호는 사용자가 이미
+            # 열어보는 이 메일이 유일하게 전달한다.
+            unreleased=$(gh api "repos/$REPO/compare/main...develop" --jq '.ahead_by' 2>/dev/null || echo "")
+            if [ -n "$unreleased" ] && [ "$unreleased" != "0" ]; then
+              detail="\`$BASE\`에 반영됐습니다. 운영에 안 나간 변경 **${unreleased}건** — 배포는 develop→main 릴리스 PR에서."
+            else
+              detail="\`$BASE\`에 반영됐습니다. 운영 반영은 develop→main 릴리스에서 따로 진행합니다."
+            fi
+          fi
+
+          printf '%s\n\n%s\n\n%s\n' \
+            "✅ **머지 완료** \`[AGENT-MERGED]\`" \
+            "\`$HEAD_REF\` → \`$BASE\`" \
+            "$detail" \
+            | gh pr comment "$PR" --repo "$REPO" --body-file -
+
+  close-issues:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'develop'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: read
+    steps:
+      - name: 본문의 close 키워드로 연결된 이슈 닫기
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          issues=$(printf '%s' "$BODY" \
+                     | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' \
+                     | grep -oE '[0-9]+' | sort -u || true)
+          if [ -z "$issues" ]; then echo "PR #$PR 본문에 연결된 이슈 없음 — 스킵"; exit 0; fi
+
+          for i in $issues; do
+            state=$(gh issue view "$i" --repo "$REPO" --json state --jq .state 2>/dev/null || echo MISSING)
+            case "$state" in
+              OPEN)
+                echo "closing #$i"
+                gh issue close "$i" --repo "$REPO" \
+                  --comment "develop에 반영됨 (PR #$PR). 운영 반영은 develop→main 릴리스에서." || true ;;
+              CLOSED)  echo "#$i 이미 닫힘 — 스킵" ;;
+              *)       echo "#$i 조회 실패($state) — 스킵" ;;
+            esac
+          done
+
+  delete-branch:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref != 'develop' &&
+      github.event.pull_request.head.ref != 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 머지된 작업 브랜치 삭제
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          # if 조건에서 이미 걸렀지만, 이 스텝만 재사용/복사될 경우를 대비한 마지막 방어선.
+          # 장수 브랜치를 지우는 사고는 복구가 번거롭다(2026-09-05 develop 삭제 사례).
+          case "$BRANCH" in
+            develop|main) echo "장수 브랜치($BRANCH) — 절대 삭제하지 않는다"; exit 0 ;;
+          esac
+
+          if ! gh api "repos/$REPO/git/refs/heads/$BRANCH" >/dev/null 2>&1; then
+            echo "$BRANCH 이미 없음(auto-merge가 --delete-branch로 지움) — 스킵"; exit 0
+          fi
+
+          gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH"
+          echo "삭제됨: $BRANCH"
