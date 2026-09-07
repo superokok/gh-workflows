@@ -149,7 +149,9 @@ jobs:
             pending|missing) echo "Claude Review 대기 중 — 스킵(끝나면 다시 깨어남)"; exit 0 ;;
             *)
               comment_once "<!-- gate:review-failed -->" \
-                "⚠️ **Claude Review 실행이 실패** `[AGENT-ACTION-REQUIRED]`($review)해서 자동 머지를 멈췄습니다. Actions에서 재실행하면 자동으로 이어집니다."
+                "🔴 **Claude Review 실행 실패** \`[AGENT-ACTION-REQUIRED]\`
+
+          리뷰 워크플로우가 \`$review\` 상태라 자동 머지를 멈췄습니다. 코드가 아니라 워크플로우 자체의 문제라 자동 수정이 안 됩니다 — Actions에서 원인을 확인하고 재실행해주세요."
               echo "review 실패($review) — 머지 안 함"; exit 0 ;;
           esac
 
