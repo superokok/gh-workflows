@@ -13,6 +13,12 @@ on:
 
 jobs:
   after-merge:
+    # 호출부가 권한을 명시해야 한다 — 이 저장소는 기본 워크플로우 권한이 좁아서,
+    # 불린 워크플로우가 요구하는 write 권한을 호출부가 안 주면 startup_failure로 죽는다.
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     uses: ./.github/workflows/after-merge.yml
     secrets: inherit
     with:
