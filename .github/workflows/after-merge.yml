@@ -22,6 +22,11 @@ name: After merge (issue close · branch cleanup) (reusable)
 
 on:
   workflow_call:
+    inputs:
+      base-branch:
+        description: 뒷정리 대상 PR의 base. 통합 브랜치가 없으면 "main"
+        type: string
+        default: "develop"
 
 jobs:
   # 머지 완료를 Gmail로 알리는 유일한 지점(2026-09-05).
@@ -85,7 +90,7 @@ jobs:
   close-issues:
     if: >-
       github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'develop'
+      github.event.pull_request.base.ref == inputs.base-branch
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -120,9 +125,9 @@ jobs:
   delete-branch:
     if: >-
       github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.base.ref == inputs.base-branch &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref != 'develop' &&
+      github.event.pull_request.head.ref != inputs.base-branch &&
       github.event.pull_request.head.ref != 'main'
     runs-on: ubuntu-latest
     permissions:
