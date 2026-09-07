@@ -1,1 +1,5 @@
 _src/
+
+# scripts/lint-workflows.sh 가 받아오는 바이너리
+actionlint
+actionlint.exe

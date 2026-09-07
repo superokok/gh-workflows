@@ -7,7 +7,8 @@ name: Claude Fix (red build → 수정 커밋) (reusable)
 #
 # 자동 수정하지 않는 것:
 #   - 리뷰 고위험 finding → 판단이 필요하다. claude-review.yml이 do-not-merge를 붙이고 사람이 본다
-#   - 시도 2회를 넘긴 실패 → 무한 재시도는 표준이 아니다. do-not-merge를 붙여 사람에게 인계
+#   - 시도 2회를 넘긴 실패 → 무한 재시도는 표준이 아니다. do-not-merge를 붙이고 [AGENT-ACTION-REQUIRED] 태그로 사람에게 인계
+#     (여기가 "Claude 몴 → 사람 몴"으로 넘어가는 지점이다)
 #   - lint 실패 → CI에서 비차단(continue-on-error)이라 워크플로우가 빨간불이 안 된다
 #
 # 라벨(do-not-merge)이 붙어 있어도 수정은 한다 — 라벨은 "머지를 막는" 신호지 "고치지 말라"가
@@ -76,7 +77,7 @@ jobs:
             if ! gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' \
                  | grep -qF '<!-- claude-fix:gave-up -->'; then
               printf '%s\n\n%s\n' \
-                '🛑 **자동 수정 2회 실패** — 사람이 봐야 합니다. 실패한 워크플로우 로그를 확인해주세요.' \
+                '🛑 **자동 수정 2회 실패** `[AGENT-ACTION-REQUIRED]` — 사람이 봐야 합니다. 실패한 워크플로우 로그를 확인해주세요.' \
                 '<!-- claude-fix:gave-up -->' \
                 | gh pr comment "$num" --repo "$REPO" --body-file -
             fi

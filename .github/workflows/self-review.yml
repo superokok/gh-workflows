@@ -1,0 +1,30 @@
+name: Claude Review
+
+# 이 저장소 자신의 2차 AI 리뷰. 소비 프로젝트와 같은 게이트를 여기에도 건다 —
+# 워크플로우 변경은 blast radius가 가장 큰데 리뷰가 없던 건 앞뒤가 안 맞는다.
+#
+# 로컬 경로(`./`)로 부른다: 여기가 원본이라 `@main`으로 부르면 PR 브랜치의 변경이
+# 아니라 이미 머지된 버전이 돌아버린다.
+#
+# 고위험이면 `do-not-merge`가 붙는다. 이 저장소엔 auto-merge가 없어서 라벨이 없어도
+# 사람이 머지하지만, 라벨은 "그냥 보지 말고 이건 특히 봐라"는 신호로 남는다.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  review:
+    # 호출부가 권한을 명시해야 한다 — 안 그러면 repo 기본 토큰 권한(id-token 없음)으로
+    # 시작해서, id-token: write를 요구하는 불린 워크플로우가 startup_failure로 죽는다.
+    # (2026-09-07 kitchen-tempo에서 실제로 겪음 — Claude Review가 전부 죽어 자동 머지가
+    #  통째로 멈췄고, check-run이 안 생기니 auto-merge는 "대기"로만 보여 알림도 없었다.)
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: ./.github/workflows/claude-review.yml
+    secrets: inherit
+    with:
+      base-branch: main

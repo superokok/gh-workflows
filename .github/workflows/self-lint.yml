@@ -1,0 +1,16 @@
+name: Lint
+
+# 이 저장소 자신의 검증 게이트. 여긴 package.json이 없어서 `check.yml`을 쓸 수 없다 —
+# 대신 actionlint로 워크플로우 YAML을 본다. self-agent가 쓰는 검증 커맨드와 같은 스크립트다.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/lint-workflows.sh

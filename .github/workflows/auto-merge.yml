@@ -149,7 +149,7 @@ jobs:
             pending|missing) echo "Claude Review 대기 중 — 스킵(끝나면 다시 깨어남)"; exit 0 ;;
             *)
               comment_once "<!-- gate:review-failed -->" \
-                "⚠️ **Claude Review 실행이 실패**($review)해서 자동 머지를 멈췄습니다. Actions에서 재실행하면 자동으로 이어집니다."
+                "⚠️ **Claude Review 실행이 실패** `[AGENT-ACTION-REQUIRED]`($review)해서 자동 머지를 멈췄습니다. Actions에서 재실행하면 자동으로 이어집니다."
               echo "review 실패($review) — 머지 안 함"; exit 0 ;;
           esac
 

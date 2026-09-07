@@ -11,14 +11,25 @@ name: Claude Review (reusable)
 # 다는 셈이라 게이트로 전혀 기능하지 않았다. 그래서 두 가지를 함께 고쳤다:
 #   (1) 여기서 고위험 findings에 do-not-merge 라벨을 붙인다(차단 수단)
 #   (2) auto-merge.yml이 이 `review` job의 완료를 기다린다(순서 보장)
+#
+# 2026-09-07: 후속 이슈에 `agent` 라벨을 같이 붙여 **사람 없이 착수**되게 했다. 그 전에는
+# 사람이 라벨을 붙여야 시작돼서, ADR 0007이 "운영 반영만 사람"이라고 정한 것과 어긋난
+# 게이트가 하나 더 있는 셈이었다(실제로 #168·#171이 며칠 방치됨). 연쇄를 막던 게 그
+# 사람 손이었으므로, 대신 아래 "깊이 제한"으로 막는다 — 후속 PR(`followup-pr` 라벨)의
+# 리뷰는 새 이슈를 만들지 않는다. 따라서 계보 하나당 이슈는 최대 1개다.
 
 on:
   workflow_call:
+    inputs:
+      base-branch:
+        description: 이 base를 향한 PR만 리뷰한다. 통합 브랜치가 없으면 "main"
+        type: string
+        default: "develop"
 
 jobs:
   review:
-    # develop 대상 PR만 (develop→main 릴리스 PR은 사람이 직접 보므로 제외)
-    if: github.event.pull_request.base.ref == 'develop'
+    # 통합 브랜치 대상 PR만 (릴리스 PR은 사람이 직접 보므로 제외)
+    if: github.event.pull_request.base.ref == inputs.base-branch
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,7 +37,10 @@ jobs:
       issues: write          # 라벨은 issues API를 탄다
       id-token: write
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 아래 프롬프트가 gh로 라벨을 붙인다
+      # AGENT_WORKFLOW_TOKEN(사람 계정 PAT)을 쓴다 — GITHUB_TOKEN으로 만든 이벤트는 다른
+      # 워크플로우를 트리거하지 않으므로(GitHub 플랫폼 제약), 그 토큰으로 `agent` 라벨을
+      # 붙이면 claude-agent.yml이 깨어나지 않아 후속 이슈가 그대로 방치된다.
+      GH_TOKEN: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,29 +72,56 @@ jobs:
 
                고위험이 없으면 **아무 라벨도 붙이지 않고 그대로 끝낸다** (auto-merge.yml이 머지).
 
+               **이 단계(차단)엔 깊이 제한이 없다.** 후속 PR이든 아니든 고위험이면 막는다.
+
             3. 라벨을 붙일지 말지 애매하면 붙이지 않는다 — staging(develop) 단계이고 되돌릴 수
                있다. 대신 그 판단 근거를 인라인 코멘트로 남긴다.
 
-            4. **차단하지 않은 finding 중 "나중에 고칠 값어치가 있는 것"이 하나라도 있으면
-               후속 이슈를 하나 만든다** (PR당 이슈 1개, finding마다 만들지 않는다).
+            4. **차단하지 않은 finding 중 "나중에 고칠 값어치가 있는 것"이 하나라도 있으면**
+               아래 4-a / 4-b 중 하나를 한다. 어느 쪽이든 **PR당 하나**만 만든다
+               (finding마다 만들지 않는다).
 
-               왜: 고위험이 아니면 PR이 그대로 머지되는데, 그러면 인라인 코멘트는 닫힌 PR에
-               남아 아무도 안 읽는다. 실제로 PR #151에서 성능·SSR 경고 2건이 여기 해당했고
-               고위험 2건 덕에 우연히 같이 고쳐졌을 뿐이다.
+               왜 남기나: 고위험이 아니면 PR이 그대로 머지되는데, 그러면 인라인 코멘트는 닫힌
+               PR에 남아 아무도 안 읽는다. 실제로 PR #151에서 성능·SSR 경고 2건이 여기
+               해당했고 고위험 2건 덕에 우연히 같이 고쳐졌을 뿐이다.
 
                대상: 정확성에 영향이 없더라도 고칠 값어치가 있는 것(성능, 불필요한 재계산,
                SSR 경고, 죽은 코드, 빠진 테스트 등). **단순 스타일·취향 지적은 제외** —
-               이슈가 노이즈가 되면 아무도 안 본다. 남길 게 없으면 이슈를 만들지 않는다.
+               이슈가 노이즈가 되면 아무도 안 본다. 남길 게 없으면 아무것도 만들지 않는다.
+
+               먼저 이 PR이 **후속 PR인지** 확인한다:
+                 gh pr view ${{ github.event.pull_request.number }} --json labels --jq '.labels[].name'
+               출력에 `followup-pr`이 있으면 후속 PR이다.
+
+            4-a. **후속 PR이 아닐 때(일반 PR) — 후속 이슈를 만들고 바로 착수시킨다.**
 
                  gh label create review-followup --color BFD4F2 --description "자동 리뷰가 남긴 후속 정리 거리" --force
-                 gh issue create --title "후속: PR #<번호> 리뷰 지적" --label review-followup --body "<본문>"
+                 gh issue create --title "후속: PR #<번호> 리뷰 지적" --label review-followup --label agent --body "<본문>"
 
                본문에는 finding별로 `파일:줄 — 무엇이 왜 문제인지 / 어떻게 고치면 되는지`를
                한 줄씩, 그리고 원 PR 링크를 적는다.
 
-               **`agent` 라벨은 붙이지 않는다.** 붙이면 자율 루프가 즉시 집어가 PR을 열고,
-               그 PR의 리뷰가 또 후속 이슈를 만드는 연쇄가 생길 수 있다. 사람이 보고 붙인다.
-               (덧붙여 `GITHUB_TOKEN`으로 만든 이벤트는 다른 워크플로우를 트리거하지 않으므로
-               지금 토큰으로는 붙여도 `claude-agent.yml`이 안 깨어난다 — ADR 0007 참고.)
+               `agent` 라벨을 같이 붙이므로 `claude-agent.yml`이 즉시 집어가 PR을 연다.
+               사람은 개입하지 않는다 — 그 PR도 이 리뷰 게이트를 그대로 통과해야 하고,
+               위험 경로면 `auto-merge.yml`이 따로 사람을 부른다.
+
+            4-b. **후속 PR일 때(`followup-pr` 라벨) — 새 이슈를 만들지 않는다. 깊이 제한.**
+
+               후속 PR의 리뷰가 또 이슈를 만들고 그게 또 착수되면 연쇄가 끝나지 않는다.
+               계보 하나당 이슈는 최대 1개로 고정한다.
+
+               대신 **원래 이슈에 코멘트로 덧붙인다**. 원래 이슈 번호는 이 PR 본문의
+               `Closes #N`에서 읽는다:
+                 gh pr view ${{ github.event.pull_request.number }} --json body --jq '.body'
+               닫혀 있으면 `gh issue reopen <N>` 후 코멘트한다. 그리고 **이미 붙어 있는 `agent`
+               라벨이 있으면 뗀다** (`gh issue edit <N> --remove-label agent`). 안 떼면 사용자가
+               이 지적을 보고 "해라"고 하고 싶어도 라벨이 그대로라 `issues: labeled` 이벤트가
+               안 나고 재개시킬 방법이 없다. 코멘트에 "다시 돌리려면 `agent` 라벨을 붙이세요"를
+               적는다. 라벨을 자동으로 다시 붙이지는 **않는다**
+               — 여기서 자동 착수를 한 번 끊어야 깊이 제한이 성립한다. 사람이 보고 판단한다.
+                 gh issue comment <N> --body "<본문 — 후속 PR #<번호>의 리뷰에서 추가로 나온 지적>"
+
+               원래 이슈 번호를 못 찾으면(본문에 `Closes #N`이 없음) 이슈를 만들지 말고
+               PR에 코멘트만 남긴다.
           claude_args: >-
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue create:*),Bash(gh label create:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh issue reopen:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh label create:*)"

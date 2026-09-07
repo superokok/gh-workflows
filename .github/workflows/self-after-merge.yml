@@ -1,0 +1,19 @@
+name: After merge (issue close · branch cleanup)
+
+# 이 저장소 자신의 머지 뒷정리. self-agent가 연 PR이 머지되면 이슈를 닫고 브랜치를 지운다.
+#
+# 이게 없으면 self-agent가 이슈를 처리해 PR을 열고 사람이 머지해도 **이슈가 열린 채로
+# 남는다** — GitHub의 close 키워드 자동 처리는 default 브랜치로 머지될 때만 도는데,
+# 여긴 default가 `main`이라 사실 자동으로 닫히긴 한다. 그래도 명시적으로 건다:
+# 브랜치 삭제는 GitHub이 안 해주고, 조건이 겹쳐도 no-op이라 무해하다.
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  after-merge:
+    uses: ./.github/workflows/after-merge.yml
+    secrets: inherit
+    with:
+      base-branch: main
