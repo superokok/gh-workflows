@@ -20,11 +20,16 @@ name: Claude Review (reusable)
 
 on:
   workflow_call:
+    inputs:
+      base-branch:
+        description: 이 base를 향한 PR만 리뷰한다. 통합 브랜치가 없으면 "main"
+        type: string
+        default: "develop"
 
 jobs:
   review:
-    # develop 대상 PR만 (develop→main 릴리스 PR은 사람이 직접 보므로 제외)
-    if: github.event.pull_request.base.ref == 'develop'
+    # 통합 브랜치 대상 PR만 (릴리스 PR은 사람이 직접 보므로 제외)
+    if: github.event.pull_request.base.ref == inputs.base-branch
     runs-on: ubuntu-latest
     permissions:
       contents: read

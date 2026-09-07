@@ -1,0 +1,21 @@
+name: Claude Review
+
+# 이 저장소 자신의 2차 AI 리뷰. 소비 프로젝트와 같은 게이트를 여기에도 건다 —
+# 워크플로우 변경은 blast radius가 가장 큰데 리뷰가 없던 건 앞뒤가 안 맞는다.
+#
+# 로컬 경로(`./`)로 부른다: 여기가 원본이라 `@main`으로 부르면 PR 브랜치의 변경이
+# 아니라 이미 머지된 버전이 돌아버린다.
+#
+# 고위험이면 `do-not-merge`가 붙는다. 이 저장소엔 auto-merge가 없어서 라벨이 없어도
+# 사람이 머지하지만, 라벨은 "그냥 보지 말고 이건 특히 봐라"는 신호로 남는다.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  review:
+    uses: ./.github/workflows/claude-review.yml
+    secrets: inherit
+    with:
+      base-branch: main

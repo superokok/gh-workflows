@@ -1,0 +1,34 @@
+name: Claude Agent (issue → PR)
+
+# 이 저장소가 **자기 이슈를 스스로 처리하는** 루프. 소비 프로젝트와 똑같이 재사용
+# 워크플로우를 부르되, 로컬 경로(`./`)로 부른다 — 여기가 그 워크플로우의 원본이라
+# `@main`으로 부르면 PR 브랜치의 변경이 아니라 이미 머지된 버전이 돌아버린다.
+#
+# 왜 필요한가: 재사용 워크플로우를 이 저장소로 분리하면서(kitchen-tempo #174),
+# 워크플로우 관련 리뷰 후속 이슈는 소비 프로젝트에 생기는데 **고칠 코드는 여기 있고
+# 여긴 루프가 없는** 상태가 됐다. 그 결과 워크플로 관련 지적은 전부 사람에게 돌아왔다.
+#
+# 통합 브랜치(`develop`)가 없다 — `main` 하나다. 소비 프로젝트가 `@main`으로 고정해
+# 부르므로 `main`이 곧 배포본이고, 그 앞에 스테이징 브랜치를 둬도 아무도 참조하지 않는다.
+# 대신 안전장치는 (a) 브랜치+PR, (b) self-lint 게이트, (c) **사람 머지**다 — 아래 참고.
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  agent:
+    uses: ./.github/workflows/claude-agent.yml
+    secrets: inherit
+    with:
+      base-branch: main
+      # YAML만 있는 저장소 — Node 셋업/설치/코드생성 단계가 통째로 필요 없다
+      install: ""
+      prepare: ""
+      verify: "bash scripts/lint-workflows.sh"
+      changelog-file: ""
+      plan-only-paths: ""
+      # 여기선 모든 변경이 위험 구간이다. `@main` 고정이라 머지 즉시 모든 소비 프로젝트에
+      # 반영되고, 재사용 워크플로우는 실제 PR이 한 번 돌아야만 런타임 검증이 된다.
+      # 그래서 에이전트 PR은 항상 do-not-merge가 붙고 사람이 diff를 보고 머지한다.
+      risk-areas: "이 저장소의 모든 변경 (`@main` 고정이라 머지 즉시 전 프로젝트 반영)"

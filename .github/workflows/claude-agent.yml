@@ -1,8 +1,8 @@
 name: Claude Agent (issue → PR) (reusable)
 
 # 자율 작업 루프의 실행부 (docs/adr/0007-autonomous-agent-loop.md).
-# 'agent' 라벨이 붙은 이슈를 CLAUDE.md의 "작업 루프"대로 구현해서 develop 대상 PR을 연다.
-# develop 머지는 CI check + auto-merge, develop→main은 사람 게이트(여기서 안 함).
+# 'agent' 라벨이 붙은 이슈를 프로젝트 규범대로 구현해서 PR을 연다.
+# 머지는 CI check + auto-merge, 운영 반영은 사람 게이트(여기서 안 함).
 #
 # 전제(리포 설정 — 코드 아님):
 #  - Claude GitHub App 설치 + secrets.CLAUDE_CODE_OAUTH_TOKEN (claude /install-github-app)
@@ -11,15 +11,47 @@ name: Claude Agent (issue → PR) (reusable)
 #    `.github/workflows/*` 파일 커밋이 거부됐다 — 이 PAT로 그 제약을 없앤다.
 #    secrets.GITHUB_TOKEN은 절대 안 쓴다(그 토큰 커밋엔 GitHub이 CI를 안 돌림).
 #  - Settings → General → Allow auto-merge
-#  - Settings → Branches → develop 보호, Require status checks = check
-#  - 'agent' 라벨 존재
+#  - 브랜치 보호 + 'agent' 라벨 존재
+#
+# 2026-09-07: Node/Prisma 전제를 입력으로 뺐다. 워크플로우 저장소처럼 package.json이
+# 없는 곳도 자기 이슈를 스스로 처리할 수 있어야 하기 때문이다 — 재사용 워크플로우를
+# 분리하면서 "워크플로우 관련 후속 이슈는 그 저장소에 생기는데 거기엔 루프가 없다"는
+# 구멍이 생겼다. `check.yml`과 같은 규칙: 커맨드 문자열이 빈 문자열이면 그 단계를 건너뛴다.
 
 on:
   workflow_call:
     inputs:
+      base-branch:
+        description: 작업 브랜치를 딸 기준이자 PR의 base. 통합 브랜치가 없으면 "main"
+        type: string
+        default: "develop"
       node-version:
         type: string
         default: "22"
+      install:
+        description: 의존성 설치. 빈 문자열이면 Node 셋업까지 통째로 건너뜀 (YAML만 있는 저장소)
+        type: string
+        default: "npm ci"
+      prepare:
+        description: 설치 직후 준비 단계 (코드 생성 등). 빈 문자열이면 건너뜀
+        type: string
+        default: "npx prisma generate"
+      verify:
+        description: 에이전트가 통과시켜야 하는 검증 커맨드. 빈 문자열이면 자동 검증 없음
+        type: string
+        default: "npm run check"
+      changelog-file:
+        description: 기능/로직 변경을 기록할 파일. 빈 문자열이면 건너뜀
+        type: string
+        default: "docs/BUSINESS_LOGIC.md"
+      plan-only-paths:
+        description: 구현하지 말고 계획만 코멘트하고 끝낼 경로 (사전 계획 게이트). 없으면 ""
+        type: string
+        default: "prisma/"
+      risk-areas:
+        description: 건드리면 do-not-merge를 붙일 구간 (사람이 diff 보고 머지)
+        type: string
+        default: "`auth` · `api/admin` · `scripts/` 배치 · `package.json` 의존성"
 
 concurrency:
   group: claude-agent-${{ github.event.issue.number }}
@@ -36,27 +68,30 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    # 암호화된 .env(repo에 커밋됨) 복호화 — 러너의 npm run check / dev DB 접근 (docs/adr/0009)
+    # 암호화된 .env(repo에 커밋됨) 복호화 — 러너의 검증 커맨드 / dev DB 접근 (docs/adr/0009)
     env:
       DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
     steps:
-      # 이슈 이벤트의 기본 체크아웃은 default 브랜치(main)라 작업 기준이 어긋난다 →
-      # develop을 직접 체크아웃한다. 여기서 에이전트가 그 위에 작업 브랜치를 딴다.
+      # 이슈 이벤트의 기본 체크아웃은 default 브랜치라 작업 기준이 어긋날 수 있다 →
+      # base-branch를 직접 체크아웃한다. 여기서 에이전트가 그 위에 작업 브랜치를 딴다.
       # token을 AGENT_WORKFLOW_TOKEN(workflow 스코프 PAT)으로 지정 - 기본 GITHUB_TOKEN엔
       # 그 스코프가 없어 이 체크아웃 이후 커밋에서 .github/workflows/* 변경이 거부된다.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: develop
+          ref: ${{ inputs.base-branch }}
           token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
 
-      # npm run check 를 러너에서 바로 돌릴 수 있게 준비 (ci.yml check job과 동일 구성)
+      # 검증 커맨드를 러너에서 바로 돌릴 수 있게 준비 (check.yml과 동일 구성)
       - uses: actions/setup-node@v4
+        if: inputs.install != ''
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
-      - run: npm ci
-      - run: npx prisma generate
+      - if: inputs.install != ''
+        run: ${{ inputs.install }}
+      - if: inputs.install != '' && inputs.prepare != ''
+        run: ${{ inputs.prepare }}
 
       # github_token엔 AGENT_WORKFLOW_TOKEN(workflow 스코프 PAT)을 넘긴다 - secrets.GITHUB_TOKEN을
       # 넘기면 그걸로 만든 커밋에는 GitHub이 CI를 안 돌리므로(문서 명시) 그건 절대 쓰지 않는다.
@@ -74,22 +109,29 @@ jobs:
           prompt: |
             GitHub 이슈 #${{ github.event.issue.number }} 를 구현한다. 이슈 제목·본문이 요구사항이다.
 
-            반드시 저장소 루트의 CLAUDE.md "🌿 작업 루프"를 그대로 따른다:
-            1. `develop`이 이미 체크아웃돼 있다. **여기서 네가 직접 작업 브랜치를 딴다**:
+            저장소 루트에 `CLAUDE.md`가 있으면 그 "작업 루프"를 그대로 따른다. 아래는 그 요약이자,
+            `CLAUDE.md`가 없는 저장소에서의 기본값이다:
+
+            1. `${{ inputs.base-branch }}`가 이미 체크아웃돼 있다. **여기서 네가 직접 작업 브랜치를 딴다**:
                `git switch -c <type>/<slug>` (예: `fix/eslint-errors`). 액션은 브랜치를 만들어 주지
-               않는다 — 2026-09-05 실측에서 에이전트가 `develop` 위에 그대로 앉아 커밋할 곳을
+               않는다 — 2026-09-05 실측에서 에이전트가 기준 브랜치 위에 그대로 앉아 커밋할 곳을
                못 찾고 턴을 소진했다. remote는 workflow 스코프 PAT로 인증돼 있어 push까지 된다.
-               **`develop`/`main`에는 절대 커밋·push하지 않는다.**
-            2. **`prisma/` 스키마·마이그레이션 변경이 필요하면** 코드를 고치지 말고, 이슈에
-               짧은 구현 계획만 코멘트로 남기고 종료한다 (마이그레이션은 사전 계획 게이트).
-            3. 작게 구현한다. `npm run check` (typecheck + vitest + prisma validate)가 통과해야 한다.
-            4. 순수 함수(파서·변환·`shared/lib` 헬퍼)를 새로 만들거나 고치면 옆에 `*.test.ts`도 같이.
-            5. 기능/로직 변경이면 `docs/BUSINESS_LOGIC.md`에 먼저 기록하고 같은 브랜치에 포함한다.
+               **`${{ inputs.base-branch }}`·`main`에는 절대 커밋·push하지 않는다.**
+            2. 사전 계획 게이트 경로: `${{ inputs.plan-only-paths }}`
+               — 이 값이 비어 있지 않고 거기 해당하는 변경이 필요하면, 코드를 고치지 말고
+               이슈에 짧은 구현 계획만 코멘트로 남기고 종료한다.
+            3. 작게 구현한다. 검증 커맨드: `${{ inputs.verify }}`
+               — 이 값이 비어 있지 않으면 그게 통과해야 한다. 비어 있으면 이 저장소엔 자동
+               검증이 없다는 뜻이니, 대신 바꾼 파일이 형식적으로 유효한지 직접 확인한다
+               (예: YAML이면 파싱, 스크립트면 문법 검사).
+            4. 순수 함수(파서·변환·헬퍼)를 새로 만들거나 고치면 옆에 테스트도 같이 쓴다.
+            5. 기록 파일: `${{ inputs.changelog-file }}`
+               — 비어 있지 않고 기능/로직 변경이면 여기 먼저 기록하고 같은 브랜치에 포함한다.
             6. **작업이 눈에 띄게 진전되면 그때그때 커밋하고 `git push -u origin <branch>`로 일찍 올린다.**
                마지막에 몰아서 하지 않는다 — 턴 상한에 걸려도 브랜치가 남아 있어야 이어서 할 수 있다
                (실측: 22개 에러를 0으로 다 고쳐놓고 커밋 전에 잘려 전부 날아갔다).
-               그 다음 `gh pr create --base develop` 로 PR을 연다. 본문에 `Closes #${{ github.event.issue.number }}`,
-               목표·완료조건·`npm run check` 결과를 적는다.
+               그 다음 `gh pr create --base ${{ inputs.base-branch }}` 로 PR을 연다. 본문에
+               `Closes #${{ github.event.issue.number }}`, 목표·완료조건·검증 결과를 적는다.
             6-a. **이 이슈가 후속 이슈(`review-followup`)면 만든 PR에 `followup-pr` 라벨을 붙인다.**
                이번 실행의 값: `${{ contains(github.event.issue.labels.*.name, 'review-followup') }}`
                — `true`일 때만 아래를 실행하고, `false`면 건너뛴다.
@@ -98,13 +140,13 @@ jobs:
                왜: `claude-review.yml`이 이 라벨을 보고 **새 후속 이슈를 만들지 않는다**.
                안 붙이면 후속 PR의 리뷰가 또 이슈를 만들고 그게 또 자동 착수돼 연쇄가 끝나지
                않는다. 이 라벨은 머지를 막지 않는다 — `do-not-merge`와 무관하다.
-            7. **위험 구간을 건드렸으면** (`auth` · `api/admin` · `scripts/` 배치 · `package.json` 의존성)
+            7. **위험 구간을 건드렸으면** (${{ inputs.risk-areas }})
                → `gh pr edit <n> --add-label do-not-merge` 하고, PR에 "위험 구간 — diff 리뷰 후
                사람이 수동 머지" 코멘트를 단다. **위험 구간이 아니면** 라벨 없이 그대로 둔다
-               (CI `check` 초록 시 `auto-merge.yml`이 자동 머지). 직접 `gh pr merge`는 부르지 않는다.
-            8. `develop`→`main` PR은 절대 만들지 않는다. 운영 반영은 사람이 한다.
+               (게이트가 초록이면 `auto-merge.yml`이 자동 머지). 직접 `gh pr merge`는 부르지 않는다.
+            8. 운영 반영(릴리스) PR은 절대 만들지 않는다. 그건 사람이 한다.
 
-            네가 만지는 파일의 ESLint 에러는 0으로 유지한다(전체 lint는 CI에서 비차단).
+            네가 만지는 파일의 린트 에러는 0으로 유지한다.
           claude_args: >-
             --max-turns 150
             --model claude-sonnet-5
