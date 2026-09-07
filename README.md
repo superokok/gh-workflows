@@ -98,9 +98,15 @@ true로 두면 그 이름의 check-run이 영원히 안 생겨 자동 머지가 
   멈춘 이슈에 `@claude 진행해줘` 한 줄이면 이어진다. 이건 소비 프로젝트가 `@claude` 멘션
   워크플로우(kitchen-tempo의 `claude.yml`)를 갖고 있을 때의 얘기이고, 없는 저장소에서는
   `agent` 라벨을 (떼었다) 붙이는 게 유일한 경로다. 멈춤 안내 코멘트는 두 방법을 다 적는다.
-- **`stale-sweep.yml`이 이벤트 유실을 잡는다.** 위 두 사고는 전부 "일어나야 할 이벤트가
-  안 와서 아무도 모르는" 형태다. 매시 열린 PR·`agent` 이슈를 훑어 멈춘 것을
-  `[AGENT-ACTION-REQUIRED]`로 알린다(같은 상태로 반복해 찌르지 않는다).
+- **감시용 cron 워크플로우는 두지 않는다(2026-09-07 `stale-sweep.yml` 삭제).** 위 두 사고는 전부
+  "일어나야 할 이벤트가 안 와서 아무도 모르는" 형태라, 처음엔 매시 도는 스윕으로 메웠다. 그런데
+  **감시자를 GitHub Actions 위에 두면 Actions가 죽을 때 감시자도 같이 죽고 침묵한다 — 그리고 침묵은
+  정상과 구별되지 않는다.** 실제로 Actions 분 할당량이 소진되자 스윕도 같이 멈췄고, 정작 그 사고를
+  아무도 못 알아챘다. 알림이 메일로 가는데 사용자가 메일을 잘 보지 않아 도달률도 0이었다.
+  **대체 수단은 소비 프로젝트의 세션 시작 브리핑이다** — 모든 작업이 Claude 세션을 거치므로, 세션이
+  시작될 때 `gh pr list`/`gh run list`로 상태를 훑어 보고한다. 세션은 Actions 위에서 돌지 않아
+  Actions가 통째로 멈춰도 동작한다(kitchen-tempo `CLAUDE.md` "📢 알림" 참고).
+  사유 저장소에서 매시 cron은 월 720분 = Free 할당량 2,000분의 3분의 1이기도 하다.
 
 - **후속 이슈는 사람 없이 착수되고, 연쇄는 깊이 1로 막힌다.** `claude-review.yml`이
   차단하지 않은 지적을 `review-followup` + `agent` 라벨 이슈로 남기면 `claude-agent.yml`이
@@ -134,7 +140,6 @@ true로 두면 그 이름의 check-run이 영원히 안 생겨 자동 머지가 
 | `self-lint.yml` | `actionlint`로 워크플로우 YAML 검증. 여깔 `package.json`이 없어 `check.yml`을 못 쓴다 |
 | `self-review.yml` | 이 저장소 PR에도 2차 AI 리뷰 |
 | `self-agent.yml` | `agent` 라벨 이슈 → PR |
-| `self-stale-sweep.yml` | 멈춘 PR·좀비 이슈 감지 (매시) |
 
 > ⚠️ **`self-*`는 이 저장소 자신의 시크릿을 쓴다.** 재사용 워크플로우를 "라이브러리"로만
 > 쓸 땐 여기 시크릿이 필요 없었지만, 자기 루프를 돌리는 순간 필요해진다 —
