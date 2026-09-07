@@ -188,39 +188,16 @@ jobs:
                       --jq '([.labels[].name] | index("do-not-merge")) != null')
           if [ "$blocked" = "true" ]; then echo "do-not-merge 라벨(리뷰가 부착) — 스킵"; exit 0; fi
 
-          headref=$(jq -r .headRefName <<<"$info")
-
           gh pr merge "$num" --repo "$REPO" --squash --delete-branch
           echo "merged #$num"
 
-          # ── 머지 완료 알림([AGENT-MERGED] 태그 -> Gmail 필터) ──────────────────────
-          # after-merge.yml에도 같은 잡(merged-notice)이 있는데, **여기서도 해야 한다.**
-          # GITHUB_TOKEN으로 머지하면 pull_request:closed 이벤트가 다른 워크플로우를 깨우지
-          # 않아서(플랫폼 공통 제약, ADR 0007) 자동 머지 경로에서는 after-merge.yml이 아예
-          # 안 돈다 — 2026-09-06 실측: 사람이 머지한 #147·#150은 실행 이력이 있고, 자동
-          # 머지된 #148·#149는 없다. 그대로 두면 "머지 완료" 메일이 흔한 경로(자동 머지)에서만
-          # 안 오는, 정반대로 뒤집힌 알림이 된다.
-          # 사람이 머지하면 after-merge.yml 쪽이 도므로, 양쪽 모두 이미 붙은 태그를 확인하고
-          # 중복으로 달지 않는다(이 파일의 이슈 close 중복과 같은 방어적 이중화).
-          if ! gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' \
-               | grep -qF '[AGENT-MERGED]'; then
-            # 운영에 안 나간 누적 건수를 이 메일에 얹는다. 릴리스는 별도 알림을 보내지 않으므로
-            # (release-pr.yml — 정기 리마인더는 무시당해서 뺐다), "쌓이고 있다"는 신호는
-            # 사용자가 이미 열어보는 이 메일이 유일하게 전달한다.
-            unreleased=$(gh api "repos/$REPO/compare/main...develop" --jq '.ahead_by' 2>/dev/null || echo "")
-            pending=""
-            if [ -n "$unreleased" ] && [ "$unreleased" != "0" ]; then
-              pending="운영에 안 나간 변경 **${unreleased}건** — 배포는 develop→main 릴리스 PR에서."
-            else
-              pending="운영 반영은 develop→main 릴리스에서 따로 진행합니다."
-            fi
-
-            printf '%s\n\n%s\n\n%s\n' \
-              "✅ **머지 완료** \`[AGENT-MERGED]\`" \
-              "\`$headref\` → \`develop\`" \
-              "$pending" \
-              | gh pr comment "$num" --repo "$REPO" --body-file -
-          fi
+          # 머지 완료 알림([AGENT-MERGED] 태그 -> Gmail 필터)은 여기서 달지 않는다.
+          # AGENT_WORKFLOW_TOKEN(PAT)으로 머지하므로 이 머지가 만드는 pull_request:closed
+          # 이벤트는 GITHUB_TOKEN과 달리 다른 워크플로우를 정상적으로 깨운다 — 그래서
+          # after-merge.yml의 merged-notice가 사람 머지·자동 머지 양쪽에서 다 돈다
+          # (2026-09-07, 이슈 #2: 예전엔 여기서도 똑같이 달아야 했는데, 그 상태로 PAT 전환만
+          # 하고 나니 두 워크플로우가 같은 코멘트를 경합해서 두 번 달 수 있었다). 알림은
+          # after-merge.yml 한 곳으로 일원화한다 — headref는 더 안 쓰므로 지운다.
 
           # develop 머지는 default 브랜치가 아니라 GitHub이 "Closes #N"으로 이슈를 안 닫는다.
           # PR 본문에서 close 키워드 + 이슈 번호를 뽑아 직접 닫는다(운영 반영은 별개).
