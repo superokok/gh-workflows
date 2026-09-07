@@ -90,6 +90,14 @@ jobs:
                (실측: 22개 에러를 0으로 다 고쳐놓고 커밋 전에 잘려 전부 날아갔다).
                그 다음 `gh pr create --base develop` 로 PR을 연다. 본문에 `Closes #${{ github.event.issue.number }}`,
                목표·완료조건·`npm run check` 결과를 적는다.
+            6-a. **이 이슈가 후속 이슈(`review-followup`)면 만든 PR에 `followup-pr` 라벨을 붙인다.**
+               이번 실행의 값: `${{ contains(github.event.issue.labels.*.name, 'review-followup') }}`
+               — `true`일 때만 아래를 실행하고, `false`면 건너뛴다.
+                 gh label create followup-pr --color D4C5F9 --description "후속 이슈에서 나온 PR (리뷰 깊이 제한용)" --force
+                 gh pr edit <n> --add-label followup-pr
+               왜: `claude-review.yml`이 이 라벨을 보고 **새 후속 이슈를 만들지 않는다**.
+               안 붙이면 후속 PR의 리뷰가 또 이슈를 만들고 그게 또 자동 착수돼 연쇄가 끝나지
+               않는다. 이 라벨은 머지를 막지 않는다 — `do-not-merge`와 무관하다.
             7. **위험 구간을 건드렸으면** (`auth` · `api/admin` · `scripts/` 배치 · `package.json` 의존성)
                → `gh pr edit <n> --add-label do-not-merge` 하고, PR에 "위험 구간 — diff 리뷰 후
                사람이 수동 머지" 코멘트를 단다. **위험 구간이 아니면** 라벨 없이 그대로 둔다
