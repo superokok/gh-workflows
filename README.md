@@ -49,7 +49,7 @@ jobs:
 name: Auto-merge to develop
 on:
   workflow_run:
-    workflows: ["CI", "Claude Review"]
+    workflows: ["CI", "Claude Review", "Preview Smoke"]
     types: [completed]
   status:
 jobs:
@@ -58,11 +58,17 @@ jobs:
     secrets: inherit
     with:
       risk-paths: '^(prisma/|package\.json$|\.github/workflows/|\.env|Dockerfile|...)'
+      require-smoke-gate: true   # preview-smoke.yml을 쓰는 경우만. 안 쓰면 생략(기본 false)
 ```
 
 `risk-paths`만 필수다. 걸리는 파일이 하나라도 바뀌면 자동 머지를 멈추고 `do-not-merge` 라벨과
 `[AGENT-ACTION-REQUIRED]` 코멘트를 남겨 사람 머지로 넘긴다. **프로젝트마다 위험한 곳이 다르므로
 기본값을 두지 않았다** — 안 넘기면 워크플로우가 뜨지 않는다.
+
+`require-smoke-gate: true`로 두면 `smoke`(preview-smoke.yml)라는 이름의 check-run이
+success/skipped/neutral일 때까지 머지를 미룬다. **`preview-smoke.yml`을 안 쓰면서 이걸
+true로 두면 그 이름의 check-run이 영원히 안 생겨 자동 머지가 영구히 멈춘다** — 기본값은
+안전하게 `false`.
 
 ### 나머지
 
@@ -73,7 +79,7 @@ jobs:
 | `claude-agent.yml` | `claude-agent.yml@main` | `issues: {types: [labeled]}` |
 | `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["CI", "Preview Smoke"], types: [completed]}` + `status:` |
 | `preview-smoke.yml` | `preview-smoke.yml@main` | `deployment_status:` |
-| `release-pr.yml` | `release-pr.yml@main` | `push: {branches: [develop]}` + `workflow_dispatch:` |
+| `release-pr.yml` | `release-pr.yml@main` (선택 입력 `pre-merge-note`: staging 링크·머지 방식 등 프로젝트별 안내 마크다운) | `push: {branches: [develop]}` + `workflow_dispatch:` |
 
 `claude.yml`(`@claude` 멘션 응답)은 `/install-github-app`이 프로젝트에 직접 만들어 주므로
 여기 없다. 배포(`deploy.yml`)·모바일 빌드도 프로젝트 고유라 각자 소유한다.

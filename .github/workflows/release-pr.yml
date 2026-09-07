@@ -32,6 +32,13 @@ name: Release PR (develop → main) (reusable)
 
 on:
   workflow_call:
+    inputs:
+      pre-merge-note:
+        description: |
+          릴리스 PR 본문에 "포함된 변경" 목록 앞에 그대로 넣을 마크다운(예: staging 확인 링크,
+          머지 방식 안내). 프로젝트마다 다르므로 여기서 강제하지 않는다. 생략 가능.
+        type: string
+        default: ""
 
 concurrency:
   group: release-pr
@@ -51,6 +58,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
           REPO: ${{ github.repository }}
+          PRE_MERGE_NOTE: ${{ inputs.pre-merge-note }}
         run: |
           set -euo pipefail
 
@@ -71,7 +79,7 @@ jobs:
           # 않으므로(위 참고) 태그를 넣어봐야 메일은 안 오고 Gmail 필터만 헷갈린다.
           {
             printf '%s\n\n' '`develop` → `main` 운영 반영입니다. **머지하면 즉시 운영 배포 + DB 마이그레이션이 돕니다.**'
-            printf '%s\n\n' '머지 전에 [staging.kitchen-tempo.com](https://staging.kitchen-tempo.com)에서 화면을 확인해주세요 — 로그인·admin 흐름도 여기서 됩니다.'
+            if [ -n "$PRE_MERGE_NOTE" ]; then printf '%s\n\n' "$PRE_MERGE_NOTE"; fi
             printf '## 포함된 변경 (%s건)\n\n' "$ahead"
             git log --format='- %s' origin/main..origin/develop
             printf '\n---\n\n%s\n' '이 PR은 `release-pr.yml`이 자동으로 열고 갱신합니다(갱신에는 알림이 가지 않습니다). 머지는 사람이 합니다.'

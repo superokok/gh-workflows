@@ -16,7 +16,10 @@ name: Preview Smoke (reusable)
 #   Vercel Preview·staging은 Deployment Protection이 켜져 있어 로그인 없이 못 연다.
 #   Vercel → Project Settings → Deployment Protection → **Protection Bypass for Automation**
 #   에서 시크릿을 만들고 GitHub Secret `VERCEL_AUTOMATION_BYPASS_SECRET`으로 등록하면 동작한다.
-#   시크릿이 없으면 이 job은 조용히 통과한다(파이프라인을 막지 않는다).
+#   시크릿이 없으면 이 job은 통과한다(인프라 미설정으로 모든 머지를 막는 건 과하다). 다만
+#   **조용히** 통과하지는 않는다 — auto-merge.yml이 이 job을 차단 게이트로 보는 구성이라면
+#   "스킵됐다"가 안 보이면 런타임 검증이 통째로 사라진 걸 아무도 모르게 되므로, warning
+#   애노테이션으로 PR 체크 화면에 남긴다.
 #
 # deployment_status 트리거라 이 파일도 default 브랜치(main)에 있는 버전이 동작한다.
 
@@ -45,6 +48,7 @@ jobs:
           BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           if [ -z "$BYPASS" ]; then
+            echo "::warning title=Preview Smoke 스킵::VERCEL_AUTOMATION_BYPASS_SECRET 미설정 — 런타임 검증이 돌지 않았습니다. Vercel → Deployment Protection → Protection Bypass for Automation에서 시크릿을 만들어 등록해주세요."
             echo "VERCEL_AUTOMATION_BYPASS_SECRET 미설정 — 스모크 스킵" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "run=false" >> "$GITHUB_OUTPUT"
           else

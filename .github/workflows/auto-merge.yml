@@ -6,11 +6,14 @@ name: Auto-merge to develop (reusable)
 #
 # 게이트 (전부 통과해야 머지):
 #   1. 위험 경로 하드 게이트 — 변경 파일 경로를 직접 검사. LLM의 자기신고에 의존하지 않는다
-#   2. `check`  (ci.yml)          — typecheck + vitest + prisma validate
+#   2. `check`  (check.yml)          — typecheck + 단위테스트 + 스키마 검증
 #   3. `review` (claude-review.yml) — 2차 AI 리뷰가 **완료**됐을 것. 고위험 finding이면
 #      리뷰가 do-not-merge 라벨을 붙이므로 그게 곧 차단이 된다
 #   4. `Vercel` 커밋 status        — 운영과 같은 빌드가 성공했을 것 (CI에 build를 중복하지 않음, ADR 0002)
-#   5. draft 아님 / do-not-merge 라벨 없음 / 충돌 없음
+#   5. `smoke` (preview-smoke.yml) — Preview URL 대상 Playwright E2E. `skipped`/`neutral`은
+#      통과시킨다 — Bypass 시크릿 미설정으로 모든 머지를 막는 건 과하다(그 경우 preview-smoke가
+#      warning 애노테이션을 남긴다)
+#   6. draft 아님 / do-not-merge 라벨 없음 / 충돌 없음
 #
 # 이벤트 기반: CI·Claude Review 완료와 Vercel status 도착 때마다 깨어나 전부 초록인지
 # 본다. 마지막에 도착한 신호가 머지를 수행한다 — 러너에서 폴링 대기하지 않는다.
@@ -29,6 +32,13 @@ on:
           라벨과 코멘트를 남겨 사람 머지로 넘긴다. 프로젝트마다 다르므로 필수 입력이다.
         type: string
         required: true
+      require-smoke-gate:
+        description: |
+          true면 `smoke`라는 이름의 check-run(preview-smoke.yml)이 success/skipped/neutral일
+          때까지 머지를 미룬다. preview-smoke.yml을 쓰지 않는 프로젝트에서 true로 두면 그
+          이름의 check-run이 영원히 생기지 않아 "missing → 대기"로 자동 머지가 영구히 멈춘다.
+        type: boolean
+        default: false
 
 permissions:
   contents: write        # squash 머지 + 브랜치 삭제
@@ -45,17 +55,24 @@ jobs:
   merge:
     if: >-
       (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'pull_request' &&
+       (github.event.workflow_run.event == 'pull_request' ||
+        github.event.workflow_run.event == 'deployment_status') &&
        github.event.workflow_run.head_repository.full_name == github.repository) ||
       (github.event_name == 'status' && github.event.context == 'Vercel')
     runs-on: ubuntu-latest
     steps:
       - name: Merge develop PR when every gate is green
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 사용자 계정 PAT로 머지한다 — GITHUB_TOKEN이 아니다. GITHUB_TOKEN이 만든 push/PR
+          # 이벤트에는 GitHub이 워크플로우를 걸지 않아서, 자동 머지된 PR에서는 develop push가
+          # 아무것도 깨우지 못한다(release-pr.yml이 갱신 안 됨, develop의 CI가 안 돎).
+          # 루프 위험 없음: 위 job의 if가 workflow_run.event를 pull_request/deployment_status로
+          # 제한해서, push로 도는 CI는 이 워크플로우를 다시 깨우지 않는다.
+          GH_TOKEN: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.workflow_run.head_sha || github.event.sha }}
           RISK_RE: ${{ inputs.risk-paths }}
+          REQUIRE_SMOKE: ${{ inputs.require-smoke-gate }}
         run: |
           set -euo pipefail
 
@@ -144,6 +161,25 @@ jobs:
                 "⚠️ **Vercel 빌드 실패**($vercel) — 자동 머지를 멈췄습니다. \`npm run check\`는 \`next build\`를 대신하지 못하니 빌드 로그를 확인해주세요."
               echo "Vercel 실패($vercel) — 머지 안 함"; exit 0 ;;
           esac
+
+          # smoke: preview-smoke.yml을 쓰는 프로젝트만 본다(require-smoke-gate=true). 안 그러면
+          # "smoke"라는 이름의 check-run이 영원히 안 생겨 missing → 대기가 무한 반복된다.
+          if [ "$REQUIRE_SMOKE" = "true" ]; then
+            # Preview 배포가 성공해야 비로소 돈다(deployment_status 트리거). 그래서 Vercel이
+            # 초록인 시점엔 아직 missing일 수 있고, 그때는 기다린다 — 이 워크플로우가
+            # "Preview Smoke" 완료에도 깨어나도록 호출부가 workflow_run.workflows에 넣어두면
+            # 그 신호가 이어받는다.
+            smoke=$(conclusion_of smoke)
+            echo "게이트: smoke=$smoke"
+            case "$smoke" in
+              success|skipped|neutral) ;;
+              pending|missing) echo "Preview Smoke 대기 중 — 스킵(끝나면 다시 깨어남)"; exit 0 ;;
+              *)
+                comment_once "<!-- gate:smoke-failed -->" \
+                  "⚠️ **Preview Smoke 실패**($smoke) — 자동 머지를 멈췄습니다. 화면이 실제로 뜨는지 보는 게이트라, Actions 아티팩트의 리포트·트레이스·스크린샷을 확인해주세요."
+                echo "smoke 실패($smoke) — 머지 안 함"; exit 0 ;;
+            esac
+          fi
 
           # 리뷰가 방금 do-not-merge를 붙였을 수 있으니 머지 직전에 라벨을 한 번 더 본다
           blocked=$(gh pr view "$num" --repo "$REPO" --json labels \
