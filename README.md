@@ -133,6 +133,19 @@ true로 두면 그 이름의 check-run이 영원히 안 생겨 자동 머지가 
 | `self-agent.yml` | `agent` 라벨 이슈 → PR |
 | `self-stale-sweep.yml` | 멈춘 PR·좀비 이슈 감지 (매시) |
 
+> ⚠️ **`self-*`는 이 저장소 자신의 시크릿을 쓴다.** 재사용 워크플로우를 "라이브러리"로만
+> 쓸 땐 여기 시크릿이 필요 없었지만, 자기 루프를 돌리는 순간 필요해진다 —
+> `secrets: inherit`은 **호출부가 있는 저장소**의 시크릿을 물려주기 때문이다.
+> 없으면 `Environment variable validation failed`로 죽는다(2026-09-07 실제로 겪음).
+>
+> ```bash
+> gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo superokok/gh-workflows
+> gh secret set AGENT_WORKFLOW_TOKEN    --repo superokok/gh-workflows
+> ```
+>
+> Claude GitHub App도 이 저장소에 설치돼 있어야 인라인 리뷰 코멘트가 달린다.
+> `self-lint`·`self-after-merge`는 `GITHUB_TOKEN`만 써서 시크릿 없이도 돈다.
+
 **로컬 경로(`./.github/workflows/...`)로 부른다.** 여기가 원본이라 `@main`으로 부르면
 PR 브랜치의 변경이 아니라 이미 머지된 버전이 돌아버린다.
 
