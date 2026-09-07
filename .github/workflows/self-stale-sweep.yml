@@ -20,3 +20,7 @@ jobs:
       statuses: read
     with:
       base-branch: main
+      # 이 저장소의 게이트는 lint와 review뿐이고 Vercel이 없다. 기본값(check,review,smoke)을
+      # 그대로 두면 없는 이름이 전부 missing으로 잡혀 멀쩡한 PR마다 오탐 알림이 간다.
+      gate-checks: "lint,review"
+      require-vercel: false

@@ -35,6 +35,16 @@ on:
         description: agent 라벨이 붙은 뒤 이 시간이 지나도 PR이 없으면 멈춘 것으로 본다
         type: number
         default: 6
+      gate-checks:
+        description: |
+          머지 게이트로 보는 check-run 이름(쉼표 구분). 프로젝트마다 다르다 — 없는 이름을
+          넣어두면 그게 영원히 `missing`이라 **멀쩡한 PR을 매번 "멈췄다"고 알린다**(오탐).
+        type: string
+        default: "check,review,smoke"
+      require-vercel:
+        description: Vercel 커밋 status도 게이트로 보는지. Vercel을 안 쓰는 저장소는 false
+        type: boolean
+        default: true
 
 jobs:
   sweep:
@@ -54,6 +64,8 @@ jobs:
           BASE: ${{ inputs.base-branch }}
           PR_STALE_H: ${{ inputs.pr-stale-hours }}
           ISSUE_STALE_H: ${{ inputs.issue-stale-hours }}
+          GATE_CHECKS: ${{ inputs.gate-checks }}
+          REQUIRE_VERCEL: ${{ inputs.require-vercel }}
         run: |
           set -euo pipefail
 
@@ -98,17 +110,25 @@ jobs:
             age=$(( (now - $(date -u -d "$upd" +%s)) / 3600 ))
             if [ "$age" -lt "$PR_STALE_H" ]; then echo "PR #$num ${age}시간 — 아직 이름"; continue; fi
 
-            check=$(conclusion_of  "$sha" check)
-            review=$(conclusion_of "$sha" review)
-            smoke=$(conclusion_of  "$sha" smoke)
-            vercel=$(gh api "repos/$REPO/commits/$sha/status" \
-                       --jq '[.statuses[] | select(.context=="Vercel")] | sort_by(.updated_at) | (last // {}) | (.state // "missing")')
+            # 게이트 이름은 프로젝트마다 다르다(입력으로 받는다). 하드코딩하면 그 이름이
+            # 없는 저장소에선 전부 missing으로 잡혀 멀쩡한 PR에 오탐 알림이 간다.
+            pairs=""
+            IFS=',' read -ra names <<<"$GATE_CHECKS"
+            for gname in "${names[@]}"; do
+              gname="$(echo "$gname" | tr -d '[:space:]')"
+              [ -z "$gname" ] && continue
+              pairs="${pairs}${gname}:$(conclusion_of "$sha" "$gname") "
+            done
+            if [ "$REQUIRE_VERCEL" = "true" ]; then
+              vstate=$(gh api "repos/$REPO/commits/$sha/status"                          --jq '[.statuses[] | select(.context=="Vercel")] | sort_by(.updated_at) | (last // {}) | (.state // "missing")')
+              pairs="${pairs}Vercel:${vstate} "
+            fi
 
-            echo "PR #$num ${age}시간 정지 — check=$check review=$review Vercel=$vercel smoke=$smoke"
+            echo "PR #$num ${age}시간 정지 — $pairs"
 
             # 무엇이 막고 있는지 이름을 적는다. 알림이 행동으로 이어지려면 이게 있어야 한다.
             blockers=""
-            for pair in "check:$check" "review:$review" "Vercel:$vercel" "smoke:$smoke"; do
+            for pair in $pairs; do
               name="${pair%%:*}"; val="${pair#*:}"
               case "$val" in
                 success|skipped|neutral) ;;
