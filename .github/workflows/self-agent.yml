@@ -18,6 +18,16 @@ on:
 
 jobs:
   agent:
+    # 호출부가 권한을 명시해야 한다 — 안 그러면 repo 기본 토큰 권한(id-token 없음)으로
+    # 시작해서, id-token: write를 요구하는 불린 워크플로우가 startup_failure로 죽는다.
+    # (2026-09-07 kitchen-tempo에서 실제로 겪음 — Claude Review가 전부 죽어 자동 머지가
+    #  통째로 멈췄고, check-run이 안 생기니 auto-merge는 "대기"로만 보여 알림도 없었다.)
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
     uses: ./.github/workflows/claude-agent.yml
     secrets: inherit
     with:

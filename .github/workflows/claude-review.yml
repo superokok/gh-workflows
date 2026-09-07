@@ -113,11 +113,15 @@ jobs:
                대신 **원래 이슈에 코멘트로 덧붙인다**. 원래 이슈 번호는 이 PR 본문의
                `Closes #N`에서 읽는다:
                  gh pr view ${{ github.event.pull_request.number }} --json body --jq '.body'
-               닫혀 있으면 `gh issue reopen <N>` 후 코멘트한다. `agent` 라벨은 **붙이지 않는다**
+               닫혀 있으면 `gh issue reopen <N>` 후 코멘트한다. 그리고 **이미 붙어 있는 `agent`
+               라벨이 있으면 뗀다** (`gh issue edit <N> --remove-label agent`). 안 떼면 사용자가
+               이 지적을 보고 "해라"고 하고 싶어도 라벨이 그대로라 `issues: labeled` 이벤트가
+               안 나고 재개시킬 방법이 없다. 코멘트에 "다시 돌리려면 `agent` 라벨을 붙이세요"를
+               적는다. 라벨을 자동으로 다시 붙이지는 **않는다**
                — 여기서 자동 착수를 한 번 끊어야 깊이 제한이 성립한다. 사람이 보고 판단한다.
                  gh issue comment <N> --body "<본문 — 후속 PR #<번호>의 리뷰에서 추가로 나온 지적>"
 
                원래 이슈 번호를 못 찾으면(본문에 `Closes #N`이 없음) 이슈를 만들지 말고
                PR에 코멘트만 남긴다.
           claude_args: >-
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh issue reopen:*),Bash(gh issue view:*),Bash(gh label create:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh issue reopen:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh label create:*)"

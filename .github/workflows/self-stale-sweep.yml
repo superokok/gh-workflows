@@ -1,0 +1,22 @@
+name: Stale sweep
+
+# 이 저장소 자신의 멈춤 감지. 여긴 auto-merge가 없어서 PR은 원래 사람을 기다리지만,
+# `agent` 라벨이 붙은 이슈가 PR 없이 방치되는 건 여기서도 똑같이 일어난다.
+
+on:
+  schedule:
+    # 매시 17분. 정각은 GitHub 전체가 몰려 지연이 크다.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    uses: ./.github/workflows/stale-sweep.yml
+    secrets: inherit
+    permissions:
+      pull-requests: write
+      issues: write
+      checks: read
+      statuses: read
+    with:
+      base-branch: main

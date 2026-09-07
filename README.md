@@ -86,6 +86,19 @@ true로 두면 그 이름의 check-run이 영원히 안 생겨 자동 머지가 
 
 ## 알아둘 것
 
+- **호출부 job은 `permissions`를 반드시 명시한다.** 불린 워크플로우가 요구하는 권한을
+  호출부가 안 주면 job이 시작도 못 하고 `startup_failure`로 죽는다 — 로그도 안 남고
+  check-run도 안 생긴다. `id-token: write`를 요구하는 건 `claude-review`·`claude-agent`·
+  `claude-fix` 셋이다. 2026-09-07 kitchen-tempo에서 이걸 빠뜨려 Claude Review가 전부 죽었고,
+  `review` check-run이 없으니 auto-merge는 "대기"로만 보여 **3시간 동안 알림 없이 정지**했다.
+- **`agent` 라벨은 "처리 중/처리 대기" 상태를 뜻한다 — 손을 뗄 땐 라벨도 뗀다.** 이 루프는
+  `issues: labeled`로 깨어나므로 **이미 붙어 있는 라벨은 다시 붙일 수 없다**. 에이전트가
+  계획만 남기고 빠지거나(사전 계획 게이트) 리뷰가 깊이 2에서 멈출 때 라벨을 떼두어야,
+  사용자가 승인하고 다시 붙이는 것으로 재개된다.
+- **`stale-sweep.yml`이 이벤트 유실을 잡는다.** 위 두 사고는 전부 "일어나야 할 이벤트가
+  안 와서 아무도 모르는" 형태다. 매시 열린 PR·`agent` 이슈를 훑어 멈춘 것을
+  `[AGENT-ACTION-REQUIRED]`로 알린다(같은 상태로 반복해 찌르지 않는다).
+
 - **후속 이슈는 사람 없이 착수되고, 연쇄는 깊이 1로 막힌다.** `claude-review.yml`이
   차단하지 않은 지적을 `review-followup` + `agent` 라벨 이슈로 남기면 `claude-agent.yml`이
   즉시 집어간다. 그 후속 PR에는 `followup-pr` 라벨이 붙고, 리뷰는 그 라벨을 보면
@@ -118,6 +131,7 @@ true로 두면 그 이름의 check-run이 영원히 안 생겨 자동 머지가 
 | `self-lint.yml` | `actionlint`로 워크플로우 YAML 검증. 여깔 `package.json`이 없어 `check.yml`을 못 쓴다 |
 | `self-review.yml` | 이 저장소 PR에도 2차 AI 리뷰 |
 | `self-agent.yml` | `agent` 라벨 이슈 → PR |
+| `self-stale-sweep.yml` | 멈춘 PR·좀비 이슈 감지 (매시) |
 
 **로컬 경로(`./.github/workflows/...`)로 부른다.** 여기가 원본이라 `@main`으로 부르면
 PR 브랜치의 변경이 아니라 이미 머지된 버전이 돌아버린다.
