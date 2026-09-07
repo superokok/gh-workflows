@@ -48,17 +48,28 @@ permissions:
   statuses: read         # Vercel 커밋 status 조회
 
 concurrency:
-  group: auto-merge-${{ github.event.workflow_run.head_sha || github.event.sha }}
+  group: auto-merge-${{ github.repository }}-${{ github.event.workflow_run.head_sha || github.event.sha }}
+  # false 유지. 이 job은 몇 초짜리라 취소로 아낄 분이 거의 없고, 같은 SHA의 게이트 신호는
+  # 몇 분 간격으로 흩어져 와서 애초에 겹치지 않는다. 반대로 취소가 `gh pr merge` 직후에
+  # 걸리면 머지는 됐는데 뒷정리(이슈 close)가 빠질 수 있다 — 이득 없이 위험만 있다.
+  # 이 워크플로우의 분 소모(월 354 run / 354분)는 취소가 아니라 **덜 깨우는 것**으로 줄인다.
   cancel-in-progress: false
 
 jobs:
   merge:
+    # `state != 'pending'`(2026-09-07): Vercel은 배포 한 건마다 커밋 status를 pending →
+    # success/failure로 두 번 이상 보낸다. pending일 때 깨어나도 아래 스크립트는 반드시
+    # "Vercel 빌드 대기 중 — 스킵"으로 끝나고 코멘트도 안 남긴다. 그런데 job이 실행되긴
+    # 하므로 GitHub의 분 단위 올림 과금으로 **1분이 그대로 나간다**. 조건을 여기서 걸면
+    # job이 skip되어 0분이다(실측: 이 워크플로우가 월 354 run / 354분으로 전체의 22%였다).
+    # 실패/에러 status는 그대로 통과시킨다 — 그때는 게이트 실패 코멘트를 남겨야 한다.
     if: >-
       (github.event_name == 'workflow_run' &&
        (github.event.workflow_run.event == 'pull_request' ||
         github.event.workflow_run.event == 'deployment_status') &&
        github.event.workflow_run.head_repository.full_name == github.repository) ||
-      (github.event_name == 'status' && github.event.context == 'Vercel')
+      (github.event_name == 'status' && github.event.context == 'Vercel' &&
+       github.event.state != 'pending')
     runs-on: ubuntu-latest
     steps:
       - name: Merge develop PR when every gate is green

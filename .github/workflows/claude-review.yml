@@ -26,6 +26,13 @@ on:
         type: string
         default: "develop"
 
+# 같은 PR에 새 커밋이 오면 앞선 리뷰를 취소한다(공식 권장형). 낡은 커밋을 대상으로 한
+# 리뷰는 끝나봐야 쓸모가 없고, 이 워크플로우는 run당 4분대로 가장 비싼 축이다
+# (2026-09-07 실측: 월 78 run / 321분).
+concurrency:
+  group: claude-review-${{ github.repository }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   review:
     # 통합 브랜치 대상 PR만 (릴리스 PR은 사람이 직접 보므로 제외)
