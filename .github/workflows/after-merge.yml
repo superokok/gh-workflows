@@ -43,6 +43,11 @@ jobs:
   #   [AGENT-MERGED]          — 머지 완료 (이 잡)
   # CI 빨간불·리뷰 실패는 태그를 붙이지 않는다 — 그건 Claude가 처리할 몫이라 사용자를 부르지 않는다.
   merged-notice:
+    # AGENT_WORKFLOW_TOKEN(PAT)으로 머지된 PR도 pull_request:closed를 정상적으로 깨우므로
+    # (auto-merge.yml 참고), 여기가 사람 머지·자동 머지 양쪽 모두에서 도는 **유일한** 알림
+    # 지점이다(2026-09-07, 이슈 #2). auto-merge.yml에는 더 이상 같은 코멘트를 다는 코드가
+    # 없다 — 예전엔 있었는데, 그 상태로 PAT 전환만 하고 나니 두 워크플로우가 경합해서
+    # 같은 머지에 코멘트·메일이 두 번 나갈 수 있었다.
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
@@ -58,9 +63,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # auto-merge.yml도 머지 직후 같은 태그를 단다. 이 워크플로우는 **사람이 머지했을 때만**
-          # 도는 게 실측 결과다(GITHUB_TOKEN이 만든 pull_request:closed는 워크플로우를 안 깨움,
-          # ADR 0007) — 그래도 양쪽이 겹칠 가능성을 대비해 이미 붙었으면 건너뛴다.
+          # 이 잡 자체가 같은 PR에 대해 여러 이벤트로 다시 돌 수 있으니(재실행 등) 방어적으로
+          # 중복 방지는 남겨둔다 — 더 이상 다른 워크플로우와 경합하기 위한 것은 아니다.
           if gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' \
                | grep -qF '[AGENT-MERGED]'; then
             echo "이미 [AGENT-MERGED] 코멘트가 있음 — 스킵"
