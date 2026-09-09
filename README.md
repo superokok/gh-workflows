@@ -202,6 +202,7 @@ jobs:
 | `self-lint.yml` | `actionlint`로 워크플로우 YAML 검증. 여깔 `package.json`이 없어 `check.yml`을 못 쓴다 |
 | `self-review.yml` | 이 저장소 PR에도 2차 AI 리뷰 |
 | `self-agent.yml` | `agent` 라벨 이슈 → PR |
+| `self-after-merge.yml` | PR 머지 후 이슈 닫기·브랜치 정리 |
 
 > ⚠️ **`self-*`는 이 저장소 자신의 시크릿을 쓴다.** 재사용 워크플로우를 "라이브러리"로만
 > 쓸 땐 여기 시크릿이 필요 없었지만, 자기 루프를 돌리는 순간 필요해진다 —
