@@ -103,6 +103,17 @@ jobs:
 
 ## 알아둘 것
 
+- **재사용 워크플로우를 *삭제*할 때는 순서가 반대다.** 추가·수정은 여기를 먼저 고치고 소비
+  프로젝트가 따라오면 되지만, 삭제는 소비 프로젝트의 **`main`까지 호출부가 걷힌 뒤**에 해야
+  한다. `workflow_run`/`status`/`schedule` 호출부는 default 브랜치 버전이 도는데, 여기서
+  파일을 먼저 지우면 그 호출부가 없어진 워크플로우를 부르며 계속 실패한다
+  (2026-09-09 실제 발생: `auto-merge.yml`을 여기서 먼저 지워 kitchen-tempo `main`이
+  릴리스될 때까지 매 이벤트마다 실패했다).
+- **`allowed_bots`가 없으면 봇이 트리거한 실행은 거부된다** (`Workflow initiated by
+  non-human actor`). 사람이 라벨을 붙이던 시절엔 안 드러나지만, 리뷰가 후속 이슈에 `agent`
+  라벨을 자동으로 붙이게 되면 그 이벤트의 actor가 봇이라 자율 루프가 전부 막힌다
+  (2026-09-09 실제 발생). `claude-agent`·`claude-fix`·`claude-review` 셋 다 필요하다.
+
 - **호출부 job은 `permissions`를 반드시 명시한다.** 불린 워크플로우가 요구하는 권한을
   호출부가 안 주면 job이 시작도 못 하고 `startup_failure`로 죽는다 — 로그도 안 남고
   check-run도 안 생긴다. `id-token: write`를 요구하는 건 `claude-review`·`claude-agent`·

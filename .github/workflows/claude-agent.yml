@@ -100,6 +100,14 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          # 봇이 트리거한 실행을 허용한다. 이게 없으면 액션이
+          # "Workflow initiated by non-human actor: claude (type: Bot)"로 거부한다.
+          #
+          # 2026-09-09 실측: 리뷰가 후속 이슈를 만들 때 `agent` 라벨까지 붙이게 바꾼 뒤
+          # (사람이 스케줄러 노릇을 하지 않게 하려는 변경), 그 라벨을 **봇이** 붙이므로
+          # issues:labeled 이벤트의 actor가 봇이 됐다 → 자율 루프가 전부 거부됐다.
+          # 사람이 라벨을 붙이던 시절엔 드러나지 않던 경로다.
+          allowed_bots: "claude"
           # 2026-09-05: 이 job이 결정론적으로 즉사하는데(첫 턴에서 is_error, duration 384ms,
           # total_cost_usd 0, modelUsage {} — 모델 호출 자체가 안 됨) 로그가 가려져 원인이 안 보인다.
           # 액션이 안내하는 대로 전체 출력을 켠다. 같은 토큰을 쓰는 claude-review.yml은 정상
