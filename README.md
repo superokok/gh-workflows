@@ -13,6 +13,8 @@
 - 브랜치: `develop`(통합) / `main`(운영). 작업은 항상 `origin/develop`에서 딴 브랜치에서
 - Node + npm, `npm run typecheck` / `test` / `lint`
 - Vercel Preview (커밋 status `Vercel`) — 없으면 `check.yml`만 쓰고 auto-merge는 안 쓰는 편이 낫다
+- **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
+  auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
 - 라벨 `do-not-merge`, `agent` (`review-followup` · `followup-pr`은 워크플로우가 알아서 만든다)
 - Secrets: `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_WORKFLOW_TOKEN`(repo+workflow 스코프 PAT),
   `DOTENV_PRIVATE_KEY`(dotenvx 쓸 때), `VERCEL_AUTOMATION_BYPASS_SECRET`(프리뷰 스모크 쓸 때)
@@ -43,32 +45,47 @@ jobs:
 `check.yml`의 각 단계는 커맨드 문자열 입력이라, 빈 문자열을 넘기면 그 단계를 건너뛴다
 (Prisma를 안 쓰면 `prepare: ""`, `schema-validate: ""`).
 
-### `auto-merge.yml` — 머지 게이트
+### `enable-auto-merge.yml` — 머지 게이트 (브랜치 보호 + 네이티브 auto-merge)
+
+**전제: 브랜치 보호(또는 룰셋)에 required status checks가 설정돼 있고, Settings → General →
+Allow auto-merge가 켜져 있어야 한다.** 둘 다 GitHub Pro 이상에서 private 저장소에 쓸 수 있다.
+없으면 `gh pr merge --auto`가 거부돼 아무것도 머지되지 않는다.
 
 ```yaml
-name: Auto-merge to develop
+name: Enable auto-merge
 on:
-  workflow_run:
-    workflows: ["CI", "Claude Review", "Preview Smoke"]
-    types: [completed]
-  status:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 jobs:
-  merge:
-    uses: superokok/gh-workflows/.github/workflows/auto-merge.yml@main
+  decide:
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    uses: superokok/gh-workflows/.github/workflows/enable-auto-merge.yml@main
     secrets: inherit
     with:
       risk-paths: '^(prisma/|package\.json$|\.github/workflows/|\.env|Dockerfile|...)'
-      require-smoke-gate: true   # preview-smoke.yml을 쓰는 경우만. 안 쓰면 생략(기본 false)
 ```
 
-`risk-paths`만 필수다. 걸리는 파일이 하나라도 바뀌면 자동 머지를 멈추고 `do-not-merge` 라벨과
-`[AGENT-ACTION-REQUIRED]` 코멘트를 남겨 사람 머지로 넘긴다. **프로젝트마다 위험한 곳이 다르므로
-기본값을 두지 않았다** — 안 넘기면 워크플로우가 뜨지 않는다.
+**머지 판정은 GitHub이 한다.** 이 워크플로우가 하는 일은 "이 PR에 auto-merge를 켤까 말까"를
+한 번 정하는 것뿐이다. 게이트 구성은 브랜치 보호의 required checks로 표현한다.
 
-`require-smoke-gate: true`로 두면 `smoke`(preview-smoke.yml)라는 이름의 check-run이
-success/skipped/neutral일 때까지 머지를 미룬다. **`preview-smoke.yml`을 안 쓰면서 이걸
-true로 두면 그 이름의 check-run이 영원히 안 생겨 자동 머지가 영구히 멈춘다** — 기본값은
-안전하게 `false`.
+`risk-paths`만 필수다. 걸리는 파일이 하나라도 바뀌면 **auto-merge를 켜지 않고**
+`do-not-merge` 라벨과 `[AGENT-ACTION-REQUIRED]` 코멘트를 남겨 사람 머지로 넘긴다. 나중 push로
+위험해지면 이미 켜둔 auto-merge를 **끈다**. **프로젝트마다 위험한 곳이 다르므로 기본값을
+두지 않았다** — 안 넘기면 워크플로우가 뜨지 않는다.
+
+> **위험 경로를 "체크 실패"로 만들지 않는다.** 필수 체크를 실패시키면 사람도 머지를 못 하게
+> 된다(관리자 우회 필요). 네이티브 auto-merge는 PR별 opt-in이라 **안 켜는 것 자체가 게이트**다 —
+> 체크는 전부 초록인 채로 머지 버튼만 사람 몫으로 남는다.
+
+#### 필수 체크로 무엇을 넣을지
+
+**`pull_request`로 트리거되는 것만 넣는다.** 워크플로우가 아예 안 돌면 그 체크는 영구
+`Pending`으로 남아 머지를 영원히 막는다(잡이 `skip`되는 건 `success`로 취급돼 무해하다 —
+둘은 다르다). 예컨대 `preview-smoke.yml`은 `deployment_status` 트리거라, 배포 이벤트가 한 번
+유실되면 그 PR이 영구히 막힌다 — **필수로 넣지 않는다.**
 
 ### 나머지
 
@@ -121,9 +138,8 @@ true로 두면 그 이름의 check-run이 영원히 안 생겨 자동 머지가 
 - **`workflow_run` / `status` / `deployment_status` 트리거는 default 브랜치(`main`)에 있는
   호출부 파일이 동작한다.** 즉 그 파일들을 고치면 `develop`→`main` 릴리스 후에 효력이 생긴다.
 - **check-run 이름이 `잡이름 / 잡이름`이 된다.** 재사용 워크플로우를 부르면 GitHub이
-  `<호출 잡> / <불린 잡>`으로 이름을 만든다. `auto-merge.yml`은 그래서 정확히 일치하는 이름과
-  `/ 이름`으로 끝나는 이름을 모두 게이트로 본다. 브랜치 보호에서 필수 체크를 지정할 때도
-  `check`가 아니라 `check / check`로 잡아야 한다.
+  `<호출 잡> / <불린 잡>`으로 이름을 만든다. 브랜치 보호에서 필수 체크를 지정할 때
+  `check`가 아니라 **`check / check`**로 잡아야 한다.
 - **private 저장소끼리 부르려면 접근 허용이 필요하다**: 이 저장소
   Settings → Actions → General → Access → *Accessible from repositories owned by the user*.
 - 태그가 아니라 `@main`으로 고정해 두면 고친 즉시 모든 프로젝트에 반영된다. 반대로 한 곳의

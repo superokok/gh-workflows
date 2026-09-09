@@ -1,0 +1,102 @@
+name: Enable auto-merge (reusable)
+
+# 네이티브 auto-merge를 켤지 말지 **한 번만** 결정한다. 머지 판정 자체는 GitHub이 한다.
+#
+# 이전(`auto-merge.yml`, 221줄)은 게이트를 우리가 직접 판정하고 머지까지 수행했다.
+# GitHub Free 프라이빗 저장소엔 브랜치 보호가 없어서 달리 방법이 없었다(ADR 0007·0008).
+# Pro로 올리면서 그 제약이 사라졌고, 표준(브랜치 보호 required checks + 네이티브
+# auto-merge)으로 옮긴다.
+#
+# ── 무엇이 좋아지나 (2026-09-07·09 실측 근거) ────────────────────────────────
+# 이전 방식은 **감시자 자신이 죽을 수 있었다.** 워크플로우라 스스로 시작해야 하고
+# (호출부 permissions 누락으로 startup_failure 두 번), `workflow_run` 이벤트로 깨어나야
+# 하고(이벤트 유실 가능), 죽으면 아무 신호 없이 전체 머지가 멈췄다(9/7 3시간 정지).
+# 네이티브 auto-merge는 GitHub이 직접 평가한다 — 죽을 워크플로우도, 잃을 이벤트 중계도 없다.
+# 남는 위험(필수 체크가 영영 안 생기면 대기)은 그대로지만, PR 화면에 보이게 된다.
+#
+# ── 위험 경로를 "체크 실패"로 만들지 않는 이유 ────────────────────────────────
+# 필수 체크를 실패시키면 **사람도 머지를 못 한다**(관리자 우회가 필요해진다).
+# 네이티브 auto-merge는 PR별 opt-in이므로, **안 켜는 것 자체가 게이트**다. 체크는 전부
+# 초록인 채로 머지 버튼만 사람 몫으로 남는다 — 이게 우리가 원하던 동작 그대로다.
+
+on:
+  workflow_call:
+    inputs:
+      base-branch:
+        description: 이 base를 향한 PR만 대상으로 한다
+        type: string
+        default: "develop"
+      merge-method:
+        description: squash / merge / rebase
+        type: string
+        default: "squash"
+      risk-paths:
+        description: |
+          위험 경로 정규식(ERE). 변경 파일이 하나라도 걸리면 auto-merge를 켜지 않고
+          do-not-merge 라벨과 코멘트를 남겨 사람 머지로 넘긴다. 프로젝트마다 다르므로 필수.
+        type: string
+        required: true
+
+jobs:
+  decide:
+    if: >-
+      github.event.pull_request.base.ref == inputs.base-branch &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # auto-merge 활성화
+      pull-requests: write   # 라벨 · 코멘트
+      issues: write          # 라벨은 issues API를 탄다
+    steps:
+      - name: 위험 경로면 사람에게, 아니면 auto-merge 켜기
+        env:
+          # PAT를 쓴다 — GITHUB_TOKEN으로 켠 auto-merge가 수행하는 머지는 그 결과 push가
+          # 다른 워크플로우를 깨우지 않는다(GitHub 플랫폼 제약, ADR 0007). release-pr.yml이
+          # 갱신되지 않고 develop의 CI도 안 돌게 된다.
+          GH_TOKEN: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          RISK_RE: ${{ inputs.risk-paths }}
+          METHOD: ${{ inputs.merge-method }}
+        run: |
+          set -euo pipefail
+
+          risky=$(gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path' \
+                    | grep -E "$RISK_RE" || true)
+
+          if [ -n "$risky" ]; then
+            echo "위험 경로 감지:"; echo "$risky"
+
+            # 이전에 켜뒀는데 나중 push로 위험해진 경우를 반드시 되돌린다.
+            # 안 끄면 체크가 초록이 되는 순간 사람 확인 없이 머지된다.
+            gh pr merge "$PR" --repo "$REPO" --disable-auto 2>/dev/null \
+              && echo "이전에 켜둔 auto-merge를 껐다" || true
+
+            gh pr edit "$PR" --repo "$REPO" --add-label do-not-merge || true
+
+            # 같은 마커가 이미 있으면 다시 달지 않는다(push마다 재실행되므로).
+            if ! gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' \
+                 | grep -qF '<!-- gate:risk-path -->'; then
+              {
+                printf '%s\n\n' '🔴 **머지 필요** `[AGENT-ACTION-REQUIRED]`'
+                printf '%s\n\n' '위험 경로 파일이 바뀌어 자동 머지를 켜지 않았습니다. 체크가 전부 초록이어도 머지되지 않습니다 — diff를 보고 직접 Merge해주세요.'
+                printf '```\n%s\n```\n\n' "$risky"
+                printf '%s\n' '<!-- gate:risk-path -->'
+              } | gh pr comment "$PR" --repo "$REPO" --body-file -
+            fi
+            exit 0
+          fi
+
+          # 위험 경로가 아니면 auto-merge를 켠다. 이후 판정·머지는 GitHub이 한다.
+          # 이미 켜져 있으면 이 명령은 실패하는데(무해), 그때도 잡을 초록으로 둔다.
+          gh pr edit "$PR" --repo "$REPO" --remove-label do-not-merge 2>/dev/null || true
+
+          if gh pr merge "$PR" --repo "$REPO" --auto --"$METHOD" --delete-branch; then
+            echo "auto-merge 켬 ($METHOD) — 필수 체크가 전부 통과하면 GitHub이 머지한다"
+          else
+            # 흔한 경우: 이미 켜져 있음 / 이미 머지됨 / 충돌.
+            # 여기서 실패로 만들면 빨간불이 나서 claude-fix가 고칠 것도 없는 걸 고치려 든다.
+            echo "auto-merge를 켜지 못했다 — 이미 켜져 있거나, 머지됨, 또는 충돌 상태일 수 있다"
+            gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus,autoMergeRequest \
+              --jq '{mergeable, mergeStateStatus, autoMerge: (.autoMergeRequest != null)}'
+          fi
