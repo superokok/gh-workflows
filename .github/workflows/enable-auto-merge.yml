@@ -69,8 +69,10 @@ jobs:
 
             # 이전에 켜뒀는데 나중 push로 위험해진 경우를 반드시 되돌린다.
             # 안 끄면 체크가 초록이 되는 순간 사람 확인 없이 머지된다.
-            gh pr merge "$PR" --repo "$REPO" --disable-auto 2>/dev/null \
-              && echo "이전에 켜둔 auto-merge를 껐다" || true
+            # `A && B || C`는 if-then-else가 아니다(shellcheck SC2015). if로 쓴다.
+            if gh pr merge "$PR" --repo "$REPO" --disable-auto 2>/dev/null; then
+              echo "이전에 켜둔 auto-merge를 껐다"
+            fi
 
             gh pr edit "$PR" --repo "$REPO" --add-label do-not-merge || true
 

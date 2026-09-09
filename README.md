@@ -84,8 +84,25 @@ jobs:
 
 **`pull_request`로 트리거되는 것만 넣는다.** 워크플로우가 아예 안 돌면 그 체크는 영구
 `Pending`으로 남아 머지를 영원히 막는다(잡이 `skip`되는 건 `success`로 취급돼 무해하다 —
-둘은 다르다). 예컨대 `preview-smoke.yml`은 `deployment_status` 트리거라, 배포 이벤트가 한 번
-유실되면 그 PR이 영구히 막힌다 — **필수로 넣지 않는다.**
+둘은 다르다).
+
+`preview-smoke.yml`이 그래서 `deployment_status` → `pull_request`로 바뀌었다(2026-09-09).
+배포 URL을 이벤트로 받는 대신 **직접 조회하며 기다리므로** 어떤 경우에도 결론을 낸다 —
+`smoke`를 필수 체크로 올릴 수 있다. 호출부 트리거를 이렇게 잡는다:
+
+```yaml
+name: Preview Smoke
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+jobs:
+  smoke:
+    permissions:
+      contents: read
+      deployments: read
+    uses: superokok/gh-workflows/.github/workflows/preview-smoke.yml@main
+    secrets: inherit
+```
 
 ### 나머지
 
@@ -102,6 +119,15 @@ jobs:
 여기 없다. 배포(`deploy.yml`)·모바일 빌드도 프로젝트 고유라 각자 소유한다.
 
 ## 알아둘 것
+
+- **WIP 제한 1 — 동시에 열린 작업 PR은 하나뿐이다.** 둘 이상이면 충돌이 **구조적으로**
+  발생한다(겹치는 코드가 없어도 난다 — 2026-09-09 PR #190·#191이 서로 무관한데 변경 기록
+  파일 끝에서 충돌했다). `claude-agent`는 열린 PR이 있으면 착수하지 않고 이슈를
+  `agent-queued`로 대기시키고, `after-merge`의 `drain-queue`가 판이 비면 가장 오래 기다린
+  것 하나를 다시 `agent`로 돌린다 — **사람이 스케줄러가 되지 않는다.** 릴리스 PR(base=main)은
+  항상 열려 있으므로 세지 않는다. 이 방식은 `strict`(브랜치 최신화 요구)나 merge queue를
+  불필요하게 만든다 — merge queue는 private 저장소에서 Enterprise Cloud + 조직 소유가
+  필요해 어차피 못 쓴다.
 
 - **재사용 워크플로우를 *삭제*할 때는 순서가 반대다.** 추가·수정은 여기를 먼저 고치고 소비
   프로젝트가 따라오면 되지만, 삭제는 소비 프로젝트의 **`main`까지 호출부가 걷힌 뒤**에 해야
