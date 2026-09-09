@@ -41,6 +41,16 @@ name: Preview Smoke (reusable)
 on:
   workflow_call:
     inputs:
+      base-branch:
+        description: |
+          이 base를 향한 PR만 검사한다. `claude-review`·`enable-auto-merge`와 같은 필터다.
+          없으면 **릴리스 PR(`develop`→`main`)에서도 돈다.** develop에 머지될 때마다 릴리스
+          PR이 synchronize로 갱신되므로 Playwright 스위트가 통째로 한 번 더 돈다 — 게다가
+          릴리스 PR은 head가 `develop`이라 **staging 배포를 잡아서** 거기다 E2E를 돌린다
+          (2026-09-09 실측: 막히진 않고 success로 끝났다). 이미 develop PR에서 검증을 마친
+          코드를 대상만 바꿔 다시 도는 셈이라 순수 낭비다.
+        type: string
+        default: "develop"
       node-version:
         type: string
         default: "22"
@@ -53,7 +63,9 @@ concurrency:
 
 jobs:
   smoke:
-    if: github.event.pull_request.draft == false
+    if: >-
+      github.event.pull_request.base.ref == inputs.base-branch &&
+      github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
