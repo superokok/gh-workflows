@@ -30,6 +30,15 @@ on:
         type: string
         default: "22"
 
+# 같은 브랜치에 새 Preview 배포가 성공하면 앞선 스모크를 취소한다. deployment_status
+# 이벤트에는 `head_ref`가 없어 공식 예제의 그 키를 못 쓰므로 배포의 ref로 묶는다
+# (없으면 `run_id`로 떨어져 취소되지 않는다 — 안전한 쪽으로 실패).
+# Playwright 스위트라 run당 2분 이상이고, 낡은 커밋 대상 실행은 끝나도 버려진다
+# (2026-09-07 실측: 월 89 run / 185분).
+concurrency:
+  group: preview-smoke-${{ github.repository }}-${{ github.event.deployment.ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     if: >-

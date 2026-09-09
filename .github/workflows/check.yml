@@ -37,6 +37,19 @@ on:
         description: 커밋된 암호화 .env를 복호화(dotenvx). 안 쓰면 생략
         required: false
 
+# 같은 PR에 새 커밋이 오면 앞선 실행을 취소한다 — 공식 권장형이다
+# (docs: actions/…/control-workflow-concurrency). `head_ref`는 pull_request 이벤트에만
+# 있으므로, push(develop/main)에서는 유일한 `run_id`로 떨어져 **서로 취소되지 않는다**.
+# 호출부가 여럿이라(재사용 워크플로우) 그룹에 저장소 이름을 넣어 프로젝트끼리 섞이지 않게 한다.
+#
+# 왜 넣나(2026-09-07): GitHub Actions는 job마다 분 단위로 올림 과금한다. 이 워크플로우는
+# 한 달에 156 run / 524분으로 최대 소모원이었는데, 연속 push하면 이미 낡은 커밋의 실행이
+# 끝까지 돌고 있었다. 취소된 run의 `check` 결론은 `cancelled`가 되지만 auto-merge는 항상
+# **head SHA**로 게이트를 보므로(낡은 SHA면 아예 스킵) 머지 판정에는 영향이 없다.
+concurrency:
+  group: check-${{ github.repository }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
