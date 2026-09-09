@@ -84,8 +84,25 @@ jobs:
 
 **`pull_request`로 트리거되는 것만 넣는다.** 워크플로우가 아예 안 돌면 그 체크는 영구
 `Pending`으로 남아 머지를 영원히 막는다(잡이 `skip`되는 건 `success`로 취급돼 무해하다 —
-둘은 다르다). 예컨대 `preview-smoke.yml`은 `deployment_status` 트리거라, 배포 이벤트가 한 번
-유실되면 그 PR이 영구히 막힌다 — **필수로 넣지 않는다.**
+둘은 다르다).
+
+`preview-smoke.yml`이 그래서 `deployment_status` → `pull_request`로 바뀌었다(2026-09-09).
+배포 URL을 이벤트로 받는 대신 **직접 조회하며 기다리므로** 어떤 경우에도 결론을 낸다 —
+`smoke`를 필수 체크로 올릴 수 있다. 호출부 트리거를 이렇게 잡는다:
+
+```yaml
+name: Preview Smoke
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+jobs:
+  smoke:
+    permissions:
+      contents: read
+      deployments: read
+    uses: superokok/gh-workflows/.github/workflows/preview-smoke.yml@main
+    secrets: inherit
+```
 
 ### 나머지
 
