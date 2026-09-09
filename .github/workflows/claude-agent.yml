@@ -53,8 +53,17 @@ on:
         type: string
         default: "`auth` · `api/admin` · `scripts/` 배치 · `package.json` 의존성"
 
+# **저장소당 하나만 돈다.** 이슈별로 묶으면 서로 다른 이슈의 에이전트가 병렬로 돌고,
+# 둘 다 "열린 PR 없음"을 보고 진행해 WIP 제한이 뚫린다 — check-then-act 경합이다
+# (2026-09-09 실측: 10:02:39·10:03:26에 각각 시작해 45초·85초 뒤 PR을 하나씩 열었다).
+#
+# 직렬화하면 두 번째는 첫 번째가 PR을 연 뒤에 시작하므로 그걸 보고 큐로 빠진다.
+#
+# `cancel-in-progress: false`인데도 **대기 슬롯은 하나뿐이다** — 세 번째가 오면 두 번째
+# 대기 실행이 취소된다. 그 이슈는 `agent` 라벨만 남고 아무 일도 안 일어나므로,
+# `after-merge.yml`의 drain-queue가 그런 "정지한 agent 이슈"도 같이 되살린다.
 concurrency:
-  group: claude-agent-${{ github.event.issue.number }}
+  group: claude-agent-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:

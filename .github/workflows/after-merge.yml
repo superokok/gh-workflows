@@ -192,13 +192,29 @@ jobs:
             echo "아직 열린 $BASE PR $open건 — 큐를 풀지 않는다"; exit 0
           fi
 
-          next=$(gh issue list --repo "$REPO" --state open --label agent-queued \
-                   --json number,createdAt --jq 'sort_by(.createdAt) | (.[0].number // empty)')
-          if [ -z "$next" ]; then echo "대기 중인 이슈 없음"; exit 0; fi
+          next=$(gh issue list --repo "$REPO" --state open --label agent-queued                    --json number,createdAt --jq 'sort_by(.createdAt) | (.[0].number // empty)')
 
-          echo "큐에서 #$next 를 깨운다"
-          gh issue edit "$next" --repo "$REPO" --remove-label agent-queued
-          gh issue comment "$next" --repo "$REPO" \
-            --body "앞 PR이 머지되어 판이 비었습니다 — 이어서 착수합니다."
-          # 라벨 부착이 claude-agent.yml을 깨운다. 마지막에 붙인다.
-          gh issue edit "$next" --repo "$REPO" --add-label agent
+          if [ -n "$next" ]; then
+            echo "큐에서 #$next 를 깨운다"
+            gh issue edit "$next" --repo "$REPO" --remove-label agent-queued
+            gh issue comment "$next" --repo "$REPO"               --body "앞 PR이 머지되어 판이 비었습니다 — 이어서 착수합니다."
+            # 라벨 부착이 claude-agent.yml을 깨운다. 마지막에 붙인다.
+            gh issue edit "$next" --repo "$REPO" --add-label agent
+            exit 0
+          fi
+
+          # 큐가 비었으면 **정지한 `agent` 이슈**를 되살린다.
+          # claude-agent는 저장소당 하나만 도는데 GitHub의 대기 슬롯은 하나뿐이라, 세 번째
+          # 실행이 오면 두 번째 대기 실행이 취소된다. 그 이슈는 `agent` 라벨만 남고 아무 일도
+          # 일어나지 않는다 — 라벨이 이미 붙어 있어 `issues: labeled`가 다시 나지도 않는다.
+          # 에이전트가 턴 상한·타임아웃으로 끊긴 경우도 같은 모양이다.
+          #
+          # 라벨을 뗐다 붙여 이벤트를 다시 낸다. 열린 PR이 있으면 위에서 이미 빠져나갔으므로,
+          # 여기 오는 건 "판이 비었는데 착수가 안 된" 이슈뿐이다.
+          stalled=$(gh issue list --repo "$REPO" --state open --label agent                       --json number,createdAt --jq 'sort_by(.createdAt) | (.[0].number // empty)')
+          if [ -z "$stalled" ]; then echo "대기 중인 이슈 없음"; exit 0; fi
+
+          echo "정지한 것으로 보이는 #$stalled 를 되살린다"
+          gh issue edit "$stalled" --repo "$REPO" --remove-label agent
+          sleep 2
+          gh issue edit "$stalled" --repo "$REPO" --add-label agent
