@@ -119,13 +119,9 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
-          # 봇이 트리거한 실행을 허용한다. 이게 없으면 액션이
-          # "Workflow initiated by non-human actor: claude (type: Bot)"로 거부한다.
-          #
-          # 2026-09-09 실측: 리뷰가 후속 이슈를 만들 때 `agent` 라벨까지 붙이게 바꾼 뒤
-          # (사람이 스케줄러 노릇을 하지 않게 하려는 변경), 그 라벨을 **봇이** 붙이므로
-          # issues:labeled 이벤트의 actor가 봇이 됐다 → 자율 루프가 전부 거부됐다.
-          # 사람이 라벨을 붙이던 시절엔 드러나지 않던 경로다.
+          # 봇이 push한 커밋(claude-agent가 연 PR 등)에서 도는 CI/Vercel이 workflow_run/status로
+          # 이 job을 깨우면 그 이벤트의 actor도 봇이라 "Workflow initiated by non-human actor"로
+          # 거부된다. 배경은 README.md "알아둘 것" 참고.
           allowed_bots: "claude"
           prompt: |
             PR #${{ steps.target.outputs.pr }} 의 게이트가 실패했다. 원인을 찾아 고친다.

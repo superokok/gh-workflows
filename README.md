@@ -110,9 +110,13 @@ jobs:
   (2026-09-09 실제 발생: `auto-merge.yml`을 여기서 먼저 지워 kitchen-tempo `main`이
   릴리스될 때까지 매 이벤트마다 실패했다).
 - **`allowed_bots`가 없으면 봇이 트리거한 실행은 거부된다** (`Workflow initiated by
-  non-human actor`). 사람이 라벨을 붙이던 시절엔 안 드러나지만, 리뷰가 후속 이슈에 `agent`
-  라벨을 자동으로 붙이게 되면 그 이벤트의 actor가 봇이라 자율 루프가 전부 막힌다
-  (2026-09-09 실제 발생). `claude-agent`·`claude-fix`·`claude-review` 셋 다 필요하다.
+  non-human actor`). 셋 다 필요하지만 트리거 경로는 워크플로우마다 다르다:
+  - `claude-agent`: 리뷰가 후속 이슈에 `agent` 라벨을 자동으로 붙이면 그 `issues: labeled`
+    이벤트의 actor가 봇이라 거부된다 (2026-09-09 실제 발생).
+  - `claude-fix`: `issues: labeled`와 무관하게 `workflow_run`/`status`로만 깨어난다. 봇이
+    push한 커밋(claude-agent가 연 PR, claude-fix 자신이 단 수정 커밋)에서 도는 CI/Vercel이
+    이 job을 깨우면 그 이벤트의 actor도 봇이라 마찬가지로 거부된다.
+  - `claude-review`: 에이전트가 만든 PR(작성자가 봇)을 리뷰 대상으로 삼으므로 필요하다.
 
 - **호출부 job은 `permissions`를 반드시 명시한다.** 불린 워크플로우가 요구하는 권한을
   호출부가 안 주면 job이 시작도 못 하고 `startup_failure`로 죽는다 — 로그도 안 남고
