@@ -157,3 +157,48 @@ jobs:
 
           gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH"
           echo "삭제됨: $BRANCH"
+
+  # ── WIP 제한 1의 큐 구동기 ────────────────────────────────────────────────
+  # 에이전트는 이미 열린 PR이 있으면 착수하지 않고 `agent-queued`로 대기시킨다
+  # (claude-agent.yml). 그 대기를 푸는 게 이 잡이다 — PR이 머지돼 판이 비면
+  # 가장 오래 기다린 이슈 하나를 다시 `agent`로 돌린다.
+  #
+  # 이게 없으면 사용자가 다시 스케줄러가 된다. 대기시키는 것까지만 자동화하고
+  # 깨우는 걸 사람에게 넘기면, 2026-09-07에 고친 문제(`agent` 라벨을 사람이
+  # 붙여야만 시작되던 것)를 형태만 바꿔 되살리는 셈이다.
+  #
+  # 하나만 깨운다. 여러 개를 한꺼번에 풀면 WIP 제한이 무의미해진다.
+  drain-queue:
+    if: github.event.pull_request.merged == true
+    needs: [close-issues]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: read
+    steps:
+      - name: 판이 비었으면 대기 중인 이슈 하나를 깨운다
+        env:
+          # PAT를 쓴다 — GITHUB_TOKEN이 붙인 라벨은 `issues: labeled` 이벤트로
+          # 다른 워크플로우를 깨우지 않아(GitHub 플랫폼 제약), claude-agent가 안 돈다.
+          GH_TOKEN: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ inputs.base-branch }}
+        run: |
+          set -euo pipefail
+
+          # 릴리스 PR(base=main)은 항상 열려 있으므로 세지 않는다 — 세면 큐가 영원히 안 풀린다.
+          open=$(gh pr list --repo "$REPO" --base "$BASE" --state open --json number --jq 'length')
+          if [ "$open" != "0" ]; then
+            echo "아직 열린 $BASE PR $open건 — 큐를 풀지 않는다"; exit 0
+          fi
+
+          next=$(gh issue list --repo "$REPO" --state open --label agent-queued \
+                   --json number,createdAt --jq 'sort_by(.createdAt) | (.[0].number // empty)')
+          if [ -z "$next" ]; then echo "대기 중인 이슈 없음"; exit 0; fi
+
+          echo "큐에서 #$next 를 깨운다"
+          gh issue edit "$next" --repo "$REPO" --remove-label agent-queued
+          gh issue comment "$next" --repo "$REPO" \
+            --body "앞 PR이 머지되어 판이 비었습니다 — 이어서 착수합니다."
+          # 라벨 부착이 claude-agent.yml을 깨운다. 마지막에 붙인다.
+          gh issue edit "$next" --repo "$REPO" --add-label agent
