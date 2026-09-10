@@ -40,8 +40,16 @@ jobs:
   # **각 스텝은 `!cancelled()`로 서로 독립이다.** 잡이 넷일 땐 하나가 실패해도 나머지가
   # 돌았는데, 스텝으로 합치면 기본값(`success()`)이라 앞이 실패하면 뒤가 통째로 스킵된다.
   # 뒷정리끼리는 의존이 없다 — 알림이 실패해도 브랜치는 지워지고 큐는 돌아야 한다.
+  #
+  # **잡 조건에 `merged == true`를 걸지 않는다**(2026-09-10). 앞의 세 스텝(알림·이슈 닫기·
+  # 브랜치 삭제)은 머지됐을 때만 의미가 있어서 각자 판정하지만, **마지막 `drain-queue`는
+  # 머지 없이 닫힌 PR 뒤에도 돌아야 한다.** 잡 단위로 막아두면 PR을 그냥 닫거나 취소했을 때
+  # 큐가 **조용히 멈춘다** — `agent-queued` 이슈들이 아무도 깨우지 않는 채 남고, 그게 정상과
+  # 구별되지 않는다(감사 L08). 판이 비었는지는 스텝 안에서 어차피 다시 확인한다.
   after-merge:
-    if: github.event.pull_request.merged == true
+    # 닫힌 PR에서만. 두 호출부 모두 `pull_request: types: [closed]`로 부르지만, 다른 트리거로
+    # 잘못 연결됐을 때 뒷정리가 엉뚱한 시점에 도는 걸 여기서 한 번 더 막는다.
+    if: github.event.pull_request.state == 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: write        # 브랜치 삭제
@@ -49,7 +57,7 @@ jobs:
       pull-requests: write   # 머지 알림 코멘트
     steps:
       - name: 머지 완료 코멘트(Gmail 알림용 태그 포함)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event.pull_request.merged == true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -73,7 +81,15 @@ jobs:
             # 운영에 안 나간 누적 건수를 이 메일에 얹는다(auto-merge.yml과 동일한 이유):
             # 릴리스 PR은 알림을 보내지 않으므로, "쌓이고 있다"는 신호는 사용자가 이미
             # 열어보는 이 메일이 유일하게 전달한다.
-            unreleased=$(gh api "repos/$REPO/compare/main...develop" --jq '.ahead_by' 2>/dev/null || echo "")
+            # `2>/dev/null`을 쓰지 않는다 — 예전엔 이게 stderr만 버려서, 권한 부족으로 온
+            # **에러 JSON이 그대로 값이 됐다.** 실제 코멘트 본문이
+            # `운영에 안 나간 변경 **{"message":"Resource not accessible by integration",...}건**`
+            # 이었고, 도입(2026-09-05) 이래 정상 분기가 한 번도 실행된 적이 없었다.
+            # 잡은 초록으로 끝나 `gh run list` 브리핑으로도 안 잡혔다(감사 L51).
+            # 이제 실패는 잡 로그에 보이고, **숫자 검증**이 어떤 실패 경로에서도 본문 오염을 막는다.
+            unreleased=$(gh api "repos/$REPO/compare/main...$BASE" --jq '.ahead_by') || unreleased=""
+            case "$unreleased" in ''|*[!0-9]*) unreleased="" ;; esac
+
             if [ -n "$unreleased" ] && [ "$unreleased" != "0" ]; then
               detail="\`$BASE\`에 반영됐습니다. 운영에 안 나간 변경 **${unreleased}건** — 배포는 develop→main 릴리스 PR에서."
             else
@@ -88,7 +104,7 @@ jobs:
             | gh pr comment "$PR" --repo "$REPO" --body-file -
 
       - name: 본문의 close 키워드로 연결된 이슈 닫기
-        if: ${{ !cancelled() && github.event.pull_request.base.ref == inputs.base-branch }}
+        if: ${{ !cancelled() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == inputs.base-branch }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -115,7 +131,7 @@ jobs:
           done
 
       - name: 머지된 작업 브랜치 삭제
-        if: ${{ !cancelled() && github.event.pull_request.base.ref == inputs.base-branch && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref != inputs.base-branch && github.event.pull_request.head.ref != 'main' }}
+        if: ${{ !cancelled() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == inputs.base-branch && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref != inputs.base-branch && github.event.pull_request.head.ref != 'main' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -136,10 +152,13 @@ jobs:
           gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH"
           echo "삭제됨: $BRANCH"
 
-  # ── WIP 제한 1의 큐 구동기 ────────────────────────────────────────────────
-  # 에이전트는 이미 열린 PR이 있으면 착수하지 않고 `agent-queued`로 대기시킨다
-  # (claude-agent.yml). 그 대기를 푸는 게 이 잡이다 — PR이 머지돼 판이 비면
-  # 가장 오래 기다린 이슈 하나를 다시 `agent`로 돌린다.
+      # ── WIP 제한 1의 큐 구동기 ────────────────────────────────────────────
+      # 에이전트도 리뷰도 열린 PR이 있으면 착수하지 않고 `agent-queued`로 대기시킨다
+      # (claude-agent.yml · claude-review.yml). 그 대기를 푸는 게 이 스텝이다 — PR이
+      # 닫혀 판이 비면 가장 오래 기다린 이슈 하나를 `agent`로 돌린다.
+      #
+      # **머지된 PR뿐 아니라 그냥 닫힌 PR 뒤에도 돈다**(감사 L08). 머지만 조건으로 걸면
+      # PR을 취소했을 때 큐가 조용히 멈추고, 멈춘 건 정상과 구별되지 않는다.
   #
   # 이게 없으면 사용자가 다시 스케줄러가 된다. 대기시키는 것까지만 자동화하고
   # 깨우는 걸 사람에게 넘기면, 2026-09-07에 고친 문제(`agent` 라벨을 사람이
@@ -168,7 +187,7 @@ jobs:
           if [ -n "$next" ]; then
             echo "큐에서 #$next 를 깨운다"
             gh issue edit "$next" --repo "$REPO" --remove-label agent-queued
-            gh issue comment "$next" --repo "$REPO"               --body "앞 PR이 머지되어 판이 비었습니다 — 이어서 착수합니다."
+            gh issue comment "$next" --repo "$REPO"               --body "앞 PR이 닫혀 판이 비었습니다 — 이어서 착수합니다."
             # 라벨 부착이 claude-agent.yml을 깨운다. 마지막에 붙인다.
             gh issue edit "$next" --repo "$REPO" --add-label agent
             exit 0
