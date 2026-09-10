@@ -162,17 +162,29 @@ jobs:
                  gh pr view ${{ github.event.pull_request.number }} --json labels --jq '.labels[].name'
                출력에 `followup-pr`이 있으면 후속 PR이다.
 
-            4-a. **후속 PR이 아닐 때(일반 PR) — 후속 이슈를 만들고 바로 착수시킨다.**
+            4-a. **후속 PR이 아닐 때(일반 PR) — 후속 이슈를 만들고 착수 라벨을 붙인다.**
+
+               먼저 **판이 비었는지** 본다. 리뷰는 PR이 열려 있는 동안 도므로 대개 안 비어 있다:
+
+                 open=$(gh pr list --base ${{ inputs.base-branch }} --state open --json number --jq 'length')
+
+               `open`이 0이 아니면 `agent-queued`를, 0이면 `agent`를 붙인다:
 
                  gh label create review-followup --color BFD4F2 --description "자동 리뷰가 남긴 후속 정리 거리" --force
-                 gh issue create --title "후속: PR #<번호> 리뷰 지적" --label review-followup --label agent --body "<본문>"
+                 gh label create agent-queued    --color FEF2C0 --description "앞 PR을 기다리는 대기 큐" --force
+                 gh issue create --title "후속: PR #<번호> 리뷰 지적" --label review-followup --label <agent 또는 agent-queued> --body "<본문>"
 
                본문에는 finding별로 `파일:줄 — 무엇이 왜 문제인지 / 어떻게 고치면 되는지`를
                한 줄씩, 그리고 원 PR 링크를 적는다.
 
-               `agent` 라벨을 같이 붙이므로 `claude-agent.yml`이 즉시 집어가 PR을 연다.
-               사람은 개입하지 않는다 — 그 PR도 이 리뷰 게이트를 그대로 통과해야 하고,
-               위험 경로면 `auto-merge.yml`이 따로 사람을 부른다.
+               **왜 나눠 붙이나**(감사 L43c): 무조건 `agent`를 붙이면 `claude-agent.yml`이
+               깨어나서 — 그것만으로 job 하나가 청구된다 — WIP 제한 1에 걸린 걸 확인하고
+               스스로 `agent-queued`로 되돌린다. 결과는 같은데 **에이전트 run 하나가 통째로
+               낭비된다.** 처음부터 큐에 넣으면 그 왕복이 사라지고, 원 PR이 닫히는 순간
+               `after-merge`의 `drain-queue`가 알아서 깨운다. 어느 쪽이든 **사람 개입은 0**이다.
+
+               `agent`로 착수된 뒤에도 사람은 개입하지 않는다 — 그 PR도 이 리뷰 게이트를
+               그대로 통과해야 하고, 위험 경로면 `enable-auto-merge.yml`이 따로 사람을 부른다.
 
             4-b. **후속 PR일 때(`followup-pr` 라벨) — 새 이슈를 만들지 않는다. 깊이 제한.**
 
@@ -194,4 +206,4 @@ jobs:
                원래 이슈 번호를 못 찾으면(본문에 `Closes #N`이 없음) 이슈를 만들지 말고
                PR에 코멘트만 남긴다.
           claude_args: >-
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh issue reopen:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh label create:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh issue reopen:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh label create:*)"
