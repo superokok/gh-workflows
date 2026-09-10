@@ -73,7 +73,13 @@ jobs:
 
                고위험이 있으면:
                  gh pr edit ${{ github.event.pull_request.number }} --add-label do-not-merge
+                 gh pr merge ${{ github.event.pull_request.number }} --disable-auto || true
                  gh pr comment ${{ github.event.pull_request.number }} --body "<요약>"
+               `--disable-auto`가 없으면 `enable-auto-merge.yml`이 이미 켜둔 네이티브
+               auto-merge가 라벨과 무관하게 그대로 진행돼, 남은 체크가 뒤늦게 초록이 되는
+               순간 사람 확인 없이 머지된다(PR #191 실측: 라벨 부착 74초 뒤 merge). 이미
+               꺼져 있거나 auto-merge가 아예 꺼진 상태면 이 명령은 실패하는데 무해하므로
+               `|| true`로 무시한다.
                코멘트엔 막은 이유를 finding별 1줄씩(파일:줄 — 무엇이 왜 위험한지) 적고,
                맨 끝에 "고쳐서 push하면 라벨을 떼고 다시 자동 머지됩니다"를 덧붙인다.
 
@@ -132,4 +138,4 @@ jobs:
                원래 이슈 번호를 못 찾으면(본문에 `Closes #N`이 없음) 이슈를 만들지 말고
                PR에 코멘트만 남긴다.
           claude_args: >-
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh issue reopen:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh label create:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh issue reopen:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh label create:*)"
