@@ -28,3 +28,7 @@ jobs:
     secrets: inherit
     with:
       base-branch: main
+      # 이 저장소의 PR은 워크플로우 YAML 몇 줄이다. `medium`은 과하고, 실측에서 이 저장소
+      # 리뷰가 22 job / 131분(전체의 18%)을 먹었다. `low`는 "적지만 확신도 높은 findings"라
+      # 작은 diff에 맞는다 — 고위험 차단 판정은 레벨과 무관하게 그대로 동작한다.
+      review-level: low

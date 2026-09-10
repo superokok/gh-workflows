@@ -25,6 +25,23 @@ on:
         description: 이 base를 향한 PR만 리뷰한다. 통합 브랜치가 없으면 "main"
         type: string
         default: "develop"
+      review-level:
+        description: |
+          `/code-review`의 effort level (low / medium / high / max).
+          **반드시 명시한다** — 안 넘기면 그 스킬이 "직전에 쓴 레벨을 재사용"하는데, CI는 매번
+          새 세션이라 무엇이 쓰일지 예측할 수 없다. 게이트가 비결정적이면 게이트가 아니다.
+          코드 저장소는 `medium`, YAML만 있는 워크플로우 저장소는 `low`가 적정선이다.
+        type: string
+        default: "medium"
+      skip-paths-regex:
+        description: |
+          변경 파일이 **전부** 이 정규식에 걸리면 리뷰를 건너뛴다(job은 돌고 step만 스킵 →
+          check-run은 `success`로 생성되므로 필수 체크와 호환된다. 워크플로우 수준 `paths:`
+          필터를 쓰면 check-run이 아예 안 생겨 **영구 Pending**이 되므로 절대 쓰지 않는다).
+          기본값은 **마크다운만**이다. `^docs/`로 잡지 않는 이유: `docs/deploy/setup-ec2.sh`처럼
+          문서 디렉터리 밑에도 실행되는 스크립트가 있다. 확장자로 좁히면 그런 게 안 새어나간다.
+        type: string
+        default: '\.md$'
 
 # 같은 PR에 새 커밋이 오면 앞선 리뷰를 취소한다(공식 권장형). 낡은 커밋을 대상으로 한
 # 리뷰는 끝나봐야 쓸모가 없고, 이 워크플로우는 run당 4분대로 가장 비싼 축이다
@@ -38,6 +55,10 @@ jobs:
     # 통합 브랜치 대상 PR만 (릴리스 PR은 사람이 직접 보므로 제외)
     if: github.event.pull_request.base.ref == inputs.base-branch
     runs-on: ubuntu-latest
+    # 폭주 상한. `--max-turns`가 아니라 job 타임아웃으로 잡는다 — max-turns는 도중에
+    # **성공으로** 끝나서, 2번(고위험 차단)에 닿기 전에 잘리면 위험한 PR이 그대로 머지된다.
+    # 타임아웃은 job을 실패시키므로 `review` 체크가 빨개져 머지가 막힌다(fail-closed).
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write   # 인라인 코멘트 + do-not-merge 라벨/코멘트
@@ -52,7 +73,41 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      # 변경 파일이 전부 skip-paths-regex에 걸리면 리뷰를 건너뛴다.
+      # 판정을 여기서 하는 이유: 이 파일은 **다른 저장소에서 호출되는** 재사용 워크플로우라
+      # `uses: ./.github/actions/...`(로컬 composite action)이 호출부 저장소를 가리켜 깨진다.
+      # 그래서 공유 액션으로 빼지 않고 각 워크플로우에 인라인으로 둔다.
+      - name: 리뷰 대상인지 판정
+        id: scope
+        env:
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SKIP_RE: ${{ inputs.skip-paths-regex }}
+        run: |
+          set -uo pipefail
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename' || true)
+
+          # 파일 목록을 못 받으면 **리뷰한다** — 판정 실패로 게이트가 조용히 사라지면 안 된다
+          if [ -z "$files" ]; then
+            echo "::warning title=변경 파일 조회 실패::리뷰를 그대로 진행합니다."
+            echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # `grep -q`를 쓰지 않는다 — 일치하는 순간 파이프를 닫아 printf가 SIGPIPE로 죽고,
+          # `pipefail` 때문에 파이프라인이 141로 끝나 판정이 뒤집힌다(preview-smoke.yml이
+          # 같은 함정을 `head`에서 겪었다). 전부 읽는 `grep -v`로 목록을 받아 비었는지만 본다.
+          non_md=$(printf '%s\n' "$files" | grep -vE "$SKIP_RE" || true)
+
+          if [ -n "$non_md" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            printf '문서 전용 PR — 리뷰를 건너뜁니다:\n%s\n' "$files" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - uses: anthropics/claude-code-action@v1
+        if: steps.scope.outputs.skip != 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 에이전트(claude-agent.yml)가 만든 PR은 봇(app/claude)이 작성자라, 이게 없으면
@@ -61,8 +116,9 @@ jobs:
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
           prompt: |
-            1. `/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}` 를 실행해
-               findings를 인라인 코멘트로 남긴다.
+            1. `/code-review:code-review ${{ inputs.review-level }} --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}` 를 실행해
+               findings를 인라인 코멘트로 남긴다. 레벨을 **반드시 넘긴다** — 생략하면 그 스킬이
+               "직전에 쓴 레벨 재사용"으로 동작하는데 CI는 매번 새 세션이라 비결정적이 된다.
 
             2. 그 findings 중 **고위험**이 하나라도 있으면 자동 머지를 막는다.
                고위험 = verdict가 CONFIRMED이고 다음 중 하나:
