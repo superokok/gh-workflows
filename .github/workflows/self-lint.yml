@@ -3,10 +3,11 @@ name: Lint
 # 이 저장소 자신의 검증 게이트. 여긴 package.json이 없어서 `check.yml`을 쓸 수 없다 —
 # 대신 actionlint로 워크플로우 YAML을 본다. self-agent가 쓰는 검증 커맨드와 같은 스크립트다.
 
+# `push: [main]`은 걸지 않는다(2026-09-10 제거). main으로 가는 길이 PR 하나뿐이라 머지 직후의
+# main 트리는 방금 PR에서 검사한 트리와 같다 — 같은 검사를 한 번 더 청구할 뿐이었다
+# (실측: 18 job / 실제 1.9분 / 청구 18분).
 on:
   pull_request:
-  push:
-    branches: [main]
 
 jobs:
   lint:

@@ -29,7 +29,13 @@ on:
         type: string
         default: "npx prisma validate"
       lint:
-        description: 별도 job으로 돈다. 차단 게이트로 쓸지는 호출부가 필요한 체크에 넣느냐로 정한다
+        description: |
+          `check` job의 마지막 step으로 돈다(2026-09-10까지는 별도 job이었다).
+          job을 나누면 `npm ci`가 두 번 돌고 **job마다 분 단위로 올림 과금**돼서, 실제 6초짜리
+          lint가 매번 1분+@로 청구됐다(실측: 42 job / 실제 4.3분 / 청구 42분).
+          같은 job에 붙이면 checkout·setup-node·install을 재사용하고 청구도 0에 가깝다.
+          부수 효과로 이미 필수 체크인 `check / check`에 lint가 포함된다 — 예전엔
+          `check / lint`가 필수가 아니라 빨개져도 아무것도 막지 못했다.
         type: string
         default: "npm run lint"
     secrets:
@@ -74,15 +80,7 @@ jobs:
       - name: Schema validate
         if: inputs.schema-validate != ''
         run: ${{ inputs.schema-validate }}
-
-  lint:
-    if: inputs.lint != ''
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ inputs.node-version }}
-          cache: npm
-      - run: ${{ inputs.install }}
-      - run: ${{ inputs.lint }}
+      # 마지막에 둔다 — typecheck·테스트가 먼저 빨개지는 게 진단에 더 유용하다.
+      - name: Lint
+        if: inputs.lint != ''
+        run: ${{ inputs.lint }}
