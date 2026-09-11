@@ -9,9 +9,23 @@ name: Check (reusable)
 on:
   workflow_call:
     inputs:
+      # ── 툴체인 ──────────────────────────────────────────────────────────────
+      # 명령 입력과 **같은 규칙**이다: 빈 문자열이면 그 설치 단계를 건너뛴다.
+      # Node에 특권을 두지 않는다 — 예전엔 setup-node와 install이 무조건 돌아서,
+      # `package.json`이 없는 프로젝트는 이 워크플로우를 아예 쓸 수 없었다.
+      # 기본값이 예전 동작 그대로라(node "22" / java "") 기존 호출부는 바뀌지 않는다.
       node-version:
+        description: 빈 문자열이면 setup-node를 건너뛴다 (JVM 전용 프로젝트)
         type: string
         default: "22"
+      java-version:
+        description: JVM 빌드가 있는 프로젝트만 넘긴다 (예 "21"). 빈 문자열이면 건너뜀
+        type: string
+        default: ""
+      java-distribution:
+        description: setup-java의 distribution. java-version이 빈 문자열이면 무시된다
+        type: string
+        default: "temurin"
       install:
         type: string
         default: "npm ci"
@@ -63,11 +77,29 @@ jobs:
       DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        if: inputs.node-version != ''
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
-      - run: ${{ inputs.install }}
+      # 폴리글랏 저장소(예: Next.js 웹 + Gradle 백엔드)를 **한 job**에서 검사하려고 둔다.
+      # 스택마다 워크플로우를 쪼개면 job이 늘고, Actions는 job 단위로 분을 올림 과금한다 —
+      # `lint`를 별도 job에서 이 job의 step으로 내린 것과 같은 이유다.
+      # setup-java의 gradle 캐시는 `**/*.gradle*`을 재귀로 해싱하므로 빌드가 하위
+      # 디렉터리에 있어도(`backend/`) 잡힌다.
+      - name: Setup JDK
+        if: inputs.java-version != ''
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+          cache: gradle
+      # `if`가 없으면 `install: ""`가 빈 `run:`이 되어 **스킵이 아니라 에러**로 떨어진다.
+      # README는 처음부터 "빈 문자열이면 건너뜀"이라고 적고 있었지만 이 단계만 빠져 있었다.
+      - name: Install
+        if: inputs.install != ''
+        run: ${{ inputs.install }}
       - name: Prepare
         if: inputs.prepare != ''
         run: ${{ inputs.prepare }}
