@@ -11,7 +11,8 @@
 ## 전제 (프로젝트가 갖춰야 하는 것)
 
 - 브랜치: `develop`(통합) / `main`(운영). 작업은 항상 `origin/develop`에서 딴 브랜치에서
-- Node + npm, `npm run typecheck` / `test` / `lint`
+- 검증 커맨드 — 기본값은 Node 기준(`npm run typecheck` / `test` / `lint`)이지만 전부
+  커맨드 문자열 입력이라 스택에 매이지 않는다. 툴체인도 선택값이다(아래 `ci.yml`)
 - Vercel Preview (커밋 status `Vercel`) — 없으면 `check.yml`만 쓰고 auto-merge는 안 쓰는 편이 낫다
 - **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
   auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
@@ -23,6 +24,42 @@
 
 > **`secrets: inherit`을 반드시 넘긴다.** 재사용 워크플로우는 호출부의 시크릿을 자동으로
 > 물려받지 않는다. 빼먹으면 조용히 인증이 없는 채로 돌다 실패한다.
+
+## 새 프로젝트에 붙이기
+
+붙이는 일은 **5층**인데, 이 저장소를 부르는 건 그중 1층뿐이다.
+
+| 층 | 무엇 | 어떻게 |
+|---|---|---|
+| 1. 로직 | 여기 재사용 워크플로우 8개 | `uses:`로 부르면 끝 |
+| 2. 호출부 | 소비 프로젝트 `.github/workflows/` | **복사 + 조정** (트리거·권한·`risk-paths`는 프로젝트마다 다르다) |
+| 3. 에이전트 | `.claude/settings.json` · `hooks/**` · `skills/steward` | **복사**. `vitest.config`의 include에 `.claude/hooks/*.test.ts`를 넣는 것을 잊지 말 것 — 빠뜨리면 훅 회귀 테스트가 **조용히 안 돈다** |
+| 4. 리포 설정 | 라벨 · auto-merge · 브랜치 보호 | **복사 불가** → `bootstrap-repo.sh` |
+| 5. 자격증명 | App 시크릿 · Claude 토큰 | **복사 불가** → `sync-secrets.sh` |
+
+```bash
+scripts/bootstrap-repo.sh <owner/repo> --dry-run
+```
+
+4층을 한 번에 건다(멱등, 여러 번 돌려도 된다). 라벨 5개, auto-merge 켜기, 통합 브랜치 생성,
+브랜치 보호(PR 필수 · 승인 0 · force push/삭제 차단). **스크립트가 못 하는 것**(GitHub App 설치,
+Vercel 설정)은 끝에 목록으로 출력한다.
+
+5층(자격증명)은 `scripts/sync-secrets.sh`가 맡는다 — 아래 "에이전트 자격증명" 참고.
+
+이 층이 사람이 가장 잘 빠뜨리는 곳이고, **빠뜨리면 전부 조용히 안 돈다** — 라벨이 없으면
+에이전트가 안 깨어나고, auto-merge가 꺼져 있으면 `gh pr merge --auto`가 거부되며, 브랜치 보호가
+없으면 게이트가 아예 없는 것이다(2026-09-10 감사에서 **이 저장소의 `main`이 무보호**인 걸
+발견했다 — 소비 프로젝트가 전부 `@main`을 핀하고 있었는데도).
+
+스크립트가 강제하는 것 하나: **`delete_branch_on_merge`는 반드시 꺼둔다.** 그 설정은 머지된 PR의
+head 브랜치를 무조건 지워서, `develop`→`main` 릴리스 PR을 머지하는 순간 **`develop` 자체가
+삭제된다**(2026-09-05 kitchen-tempo에서 실제로 겪고 복구함). 브랜치 정리는 `after-merge.yml`이
+base와 이름을 보고 안전하게 한다.
+
+> **템플릿 저장소로 굳히는 건 아직이다.** 표본이 kitchen-tempo 하나뿐이라, 무엇이 진짜 공통이고
+> 무엇이 그 프로젝트 전용(Vercel·Neon·Prisma·Capacitor, 스킬 4개 중 3개)인지 아직 못 가린다.
+> 두 번째 프로젝트를 실제로 붙여보고 그 경계를 근거로 굳힌다.
 
 ## 에이전트 자격증명 — GitHub App
 
@@ -126,6 +163,29 @@ jobs:
 `check.yml`의 각 단계는 커맨드 문자열 입력이라, 빈 문자열을 넘기면 그 단계를 건너뛴다
 (Prisma를 안 쓰면 `prepare: ""`, `schema-validate: ""`).
 
+**툴체인 설치도 같은 규칙이다** — `node-version`/`java-version`이 빈 문자열이면 그 설치를
+건너뛴다. 스택은 프로젝트가 정하고, 이 저장소는 *틀*만 갖는다:
+
+```yaml
+# 폴리글랏 (Next.js 웹 + Gradle 백엔드) — job 하나, 필수 체크 하나로 끝난다
+with:
+  java-version: "21"
+  prepare: ""                                  # Prisma 없음
+  schema-validate: ""
+  test: "cd backend && ./gradlew test"
+```
+
+```yaml
+with:
+  node-version: ""        # package.json이 없는 JVM 전용 프로젝트
+  install: ""
+```
+
+**스택별로 워크플로우를 쪼개지 않은 이유**: job이 늘면 그만큼 분이 올림 과금되고
+(`lint`를 별도 job에서 step으로 내린 것과 같은 이유), 필수 체크 이름도 하나 더 늘어
+브랜치 보호 설정이 프로젝트마다 갈라진다. 스택이 하나 늘 때 추가되는 건 setup 스텝
+하나뿐이고, 기본값이 비어 있어 다른 프로젝트에는 무해하다.
+
 ### `enable-auto-merge.yml` — 머지 게이트 (브랜치 보호 + 네이티브 auto-merge)
 
 **전제: 브랜치 보호(또는 룰셋)에 required status checks가 설정돼 있고, Settings → General →
@@ -205,13 +265,15 @@ jobs:
   서로 다른 이슈의 에이전트가 병렬로 돌고 둘 다 "열린 PR 없음"을 봐서 WIP 제한이 뚫린다 —
   check-then-act 경합이다(2026-09-09 실측: 45초 간격으로 PR이 둘 열렸다). 대기 슬롯은
   하나뿐이라 세 번째가 오면 두 번째가 취소되는데, 그 이슈는 `agent` 라벨만 남고 멈춘다 —
-  `drain-queue`가 그런 것도 라벨을 뗐다 붙여 되살린다.
+  `after-merge` 잡의 큐 구동 스텝(`drain-queue`, PR #24부터 별도 잡이 아니라 스텝이다)이
+  그런 것도 라벨을 뗐다 붙여 되살린다.
 - **WIP 제한 1 — 동시에 열린 작업 PR은 하나뿐이다.** 둘 이상이면 충돌이 **구조적으로**
   발생한다(겹치는 코드가 없어도 난다 — 2026-09-09 PR #190·#191이 서로 무관한데 변경 기록
   파일 끝에서 충돌했다). `claude-agent`는 열린 PR이 있으면 착수하지 않고 이슈를
-  `agent-queued`로 대기시키고, `after-merge`의 `drain-queue`가 판이 비면 가장 오래 기다린
-  것 하나를 다시 `agent`로 돌린다 — **사람이 스케줄러가 되지 않는다.** 릴리스 PR(base=main)은
-  항상 열려 있으므로 세지 않는다. 이 방식은 `strict`(브랜치 최신화 요구)나 merge queue를
+  `agent-queued`로 대기시키고, `after-merge` 잡의 큐 구동 스텝(`drain-queue`)이 판이 비면
+  가장 오래 기다린 것 하나를 다시 `agent`로 돌린다 — **사람이 스케줄러가 되지 않는다.**
+  릴리스 PR(base=main)은 항상 열려 있으므로 세지 않는다. 이 방식은 `strict`(브랜치 최신화
+  요구)나 merge queue를
   불필요하게 만든다 — merge queue는 private 저장소에서 Enterprise Cloud + 조직 소유가
   필요해 어차피 못 쓴다.
 
