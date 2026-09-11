@@ -11,7 +11,8 @@
 ## 전제 (프로젝트가 갖춰야 하는 것)
 
 - 브랜치: `develop`(통합) / `main`(운영). 작업은 항상 `origin/develop`에서 딴 브랜치에서
-- Node + npm, `npm run typecheck` / `test` / `lint`
+- 검증 커맨드 — 기본값은 Node 기준(`npm run typecheck` / `test` / `lint`)이지만 전부
+  커맨드 문자열 입력이라 스택에 매이지 않는다. 툴체인도 선택값이다(아래 `ci.yml`)
 - Vercel Preview (커밋 status `Vercel`) — 없으면 `check.yml`만 쓰고 auto-merge는 안 쓰는 편이 낫다
 - **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
   auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
@@ -44,6 +45,29 @@ jobs:
 
 `check.yml`의 각 단계는 커맨드 문자열 입력이라, 빈 문자열을 넘기면 그 단계를 건너뛴다
 (Prisma를 안 쓰면 `prepare: ""`, `schema-validate: ""`).
+
+**툴체인 설치도 같은 규칙이다** — `node-version`/`java-version`이 빈 문자열이면 그 설치를
+건너뛴다. 스택은 프로젝트가 정하고, 이 저장소는 *틀*만 갖는다:
+
+```yaml
+# 폴리글랏 (Next.js 웹 + Gradle 백엔드) — job 하나, 필수 체크 하나로 끝난다
+with:
+  java-version: "21"
+  prepare: ""                                  # Prisma 없음
+  schema-validate: ""
+  test: "cd backend && ./gradlew test"
+```
+
+```yaml
+with:
+  node-version: ""        # package.json이 없는 JVM 전용 프로젝트
+  install: ""
+```
+
+**스택별로 워크플로우를 쪼개지 않은 이유**: job이 늘면 그만큼 분이 올림 과금되고
+(`lint`를 별도 job에서 step으로 내린 것과 같은 이유), 필수 체크 이름도 하나 더 늘어
+브랜치 보호 설정이 프로젝트마다 갈라진다. 스택이 하나 늘 때 추가되는 건 setup 스텝
+하나뿐이고, 기본값이 비어 있어 다른 프로젝트에는 무해하다.
 
 ### `enable-auto-merge.yml` — 머지 게이트 (브랜치 보호 + 네이티브 auto-merge)
 
