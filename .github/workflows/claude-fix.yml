@@ -45,6 +45,24 @@ jobs:
     env:
       DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
     steps:
+      # ── 자격증명: PAT가 아니라 GitHub App 설치 토큰 ──────────────────────────
+      # App은 private key라 **만료가 없고**, 설치를 "All repositories"로 두면 새 저장소가
+      # 자동으로 포함돼 저장소 목록을 갱신할 일이 없다. fine-grained PAT가 강제하던 1년
+      # 교체와 저장소별 접근 목록 관리가 둘 다 사라진다.
+      #
+      # **자동 GITHUB_TOKEN과 달리 App 토큰으로 만든 이벤트는 다른 워크플로우를 트리거한다.**
+      # 이 루프가 PAT를 쓰던 이유가 정확히 그거였고(라벨·머지·push가 다음 워크플로우를 깨워야
+      # 한다), App은 그 성질을 그대로 갖는다.
+      #
+      # App에 줘야 하는 권한: Contents / Pull requests / Issues / **Workflows** = write.
+      # Workflows가 없으면 `.github/workflows/*` 커밋이 거부된다 — Claude GitHub App 설치
+      # 토큰을 못 쓰고 PAT로 갔던 원래 이유가 이것이다(ADR 0007 "알려진 제약").
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
       # ── 고칠 대상인지 판정 (PR 찾기 + 시도 횟수 상한) ────────────────────────
       - name: 대상 판정
         id: target
@@ -102,7 +120,7 @@ jobs:
           ref: ${{ steps.target.outputs.ref }}
           # 수정 커밋을 PR 브랜치에 push한다. .github/workflows/*도 고칠 수 있어야 하므로
           # workflow 스코프 PAT (docs/adr/0007 "알려진 제약").
-          token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: actions/setup-node@v4
         if: steps.target.outputs.run == 'true'
@@ -118,11 +136,11 @@ jobs:
         if: steps.target.outputs.run == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
           # 봇이 push한 커밋(claude-agent가 연 PR 등)에서 도는 CI/Vercel이 workflow_run/status로
           # 이 job을 깨우면 그 이벤트의 actor도 봇이라 "Workflow initiated by non-human actor"로
           # 거부된다. 배경은 README.md "알아둘 것" 참고.
-          allowed_bots: "claude"
+          allowed_bots: "claude,agent-ops"
           prompt: |
             PR #${{ steps.target.outputs.pr }} 의 게이트가 실패했다. 원인을 찾아 고친다.
             PR 브랜치(`${{ steps.target.outputs.ref }}`)가 이미 체크아웃돼 있고 `npm ci`도 끝났다.

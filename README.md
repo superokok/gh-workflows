@@ -16,11 +16,52 @@
 - **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
   auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
 - 라벨 `do-not-merge`, `agent` (`review-followup` · `followup-pr`은 워크플로우가 알아서 만든다)
-- Secrets: `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_WORKFLOW_TOKEN`(repo+workflow 스코프 PAT),
-  `DOTENV_PRIVATE_KEY`(dotenvx 쓸 때), `VERCEL_AUTOMATION_BYPASS_SECRET`(프리뷰 스모크 쓸 때)
+- **이 루프 전용 GitHub App** + Secrets `AGENT_APP_ID` / `AGENT_APP_PRIVATE_KEY`
+  (아래 "에이전트 자격증명" 참고)
+- Secrets: `CLAUDE_CODE_OAUTH_TOKEN`, `DOTENV_PRIVATE_KEY`(dotenvx 쓸 때),
+  `VERCEL_AUTOMATION_BYPASS_SECRET`(프리뷰 스모크 쓸 때)
 
 > **`secrets: inherit`을 반드시 넘긴다.** 재사용 워크플로우는 호출부의 시크릿을 자동으로
 > 물려받지 않는다. 빼먹으면 조용히 인증이 없는 채로 돌다 실패한다.
+
+## 에이전트 자격증명 — GitHub App
+
+워크플로우들은 `actions/create-github-app-token@v3`로 **App 설치 토큰**을 job마다 발급해
+쓴다. 예전엔 사람 계정의 fine-grained PAT(`AGENT_WORKFLOW_TOKEN`)였다.
+
+**왜 `secrets.GITHUB_TOKEN`을 못 쓰나**: 그 토큰으로 만든 이벤트는 다른 워크플로우를
+트리거하지 않는다(GitHub 플랫폼 제약). 라벨 하나가 다음 워크플로우를 깨워야 도는 루프라
+이게 치명적이다. **App 설치 토큰에는 그 제약이 없다** — PAT를 쓰던 이유가 그거였고 App도
+같은 성질을 갖는다.
+
+**왜 PAT에서 옮겼나**: fine-grained PAT는 최대 1년으로 만료가 강제되고, 저장소를 추가할
+때마다 토큰의 Repository access 목록을 갱신해야 한다. App은 private key라 만료가 없고,
+설치를 *All repositories*로 두면 새 저장소가 자동으로 포함된다.
+
+### App 설정
+
+| 항목 | 값 |
+|---|---|
+| 이름 | `agent-ops` (봇 actor가 `agent-ops[bot]`이 된다) |
+| Repository permissions | Contents: **Read and write** |
+| | Pull requests: **Read and write** |
+| | Issues: **Read and write** |
+| | **Workflows: Read and write** |
+| 설치 범위 | All repositories |
+
+**Workflows 권한이 핵심이다.** 없으면 `.github/workflows/*`를 건드리는 커밋이 거부된다 —
+Claude GitHub App 설치 토큰을 못 쓰고 PAT로 우회했던 원래 이유가 정확히 이것이다.
+
+> **App 이름을 다르게 지으면** `claude-agent`·`claude-fix`·`claude-review`의
+> `allowed_bots: "claude,agent-ops"`에서 뒤쪽 슬러그를 같이 바꿔야 한다. 안 바꾸면 그 App이
+> 트리거한 실행이 `Workflow initiated by non-human actor`로 거부된다 — 봇이 붙인 `agent`
+> 라벨로 깨어나는 경로가 조용히 죽는다.
+
+### 알림이 하나 바뀐다
+
+`release-pr.yml`이 여는 릴리스 PR의 작성자가 사람에서 봇이 된다. 예전엔 "자기 자신의 행동"
+이라 알림이 안 갔는데 이제 **새 릴리스 PR이 열릴 때 한 번** 간다(갱신은 여전히 무음이다 —
+GitHub은 본문 수정·커밋 추가에 알림을 보내지 않는다). 빈도는 릴리스 주기당 1회다.
 
 ## 호출부 (프로젝트 `.github/workflows/`)
 
@@ -204,9 +245,11 @@ jobs:
   **새 이슈를 만들지 않고 원래 이슈에 코멘트로 덧붙인다**(닫혔으면 reopen). 계보
   하나당 이슈 1개로 고정된다. 깊이 2 이상의 지적은 `agent` 라벨을 안 붙이므로
   거기서만 사람이 본다. 고위험 차단(`do-not-merge`)은 깊이와 무관하게 항상 동작한다.
-- **`claude-review.yml`은 `AGENT_WORKFLOW_TOKEN`으로 라벨을 붙인다.** `GITHUB_TOKEN`으로
-  만든 이벤트는 다른 워크플로우를 트리거하지 않아(GitHub 플랫폼 제약), 그 토큰으로
-  `agent`를 붙이면 `claude-agent.yml`이 깨어나지 않아 이슈가 그대로 방치된다.
+- **`claude-review.yml`은 App 설치 토큰으로 라벨을 붙인다.** `GITHUB_TOKEN`으로 만든
+  이벤트는 다른 워크플로우를 트리거하지 않아(GitHub 플랫폼 제약), 그 토큰으로 `agent`를
+  붙이면 `claude-agent.yml`이 깨어나지 않아 이슈가 그대로 방치된다. App 토큰엔 그 제약이
+  없다. 그리고 이때 actor가 `agent-ops[bot]`이 되므로 `allowed_bots`에 그 슬러그가
+  들어 있어야 한다 — 안 그러면 `Workflow initiated by non-human actor`로 거부된다.
 
 - **`workflow_run` / `status` / `deployment_status` 트리거는 default 브랜치(`main`)에 있는
   호출부 파일이 동작한다.** 즉 그 파일들을 고치면 `develop`→`main` 릴리스 후에 효력이 생긴다.
@@ -238,7 +281,8 @@ jobs:
 >
 > ```bash
 > gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo superokok/gh-workflows
-> gh secret set AGENT_WORKFLOW_TOKEN    --repo superokok/gh-workflows
+> gh secret set AGENT_APP_ID            --repo superokok/gh-workflows
+> gh secret set AGENT_APP_PRIVATE_KEY   --repo superokok/gh-workflows < app-private-key.pem
 > ```
 >
 > Claude GitHub App도 이 저장소에 설치돼 있어야 인라인 리뷰 코멘트가 달린다.
