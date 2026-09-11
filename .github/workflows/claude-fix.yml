@@ -174,7 +174,7 @@ jobs:
             4. 고쳤으면 `npm run check` 통과를 확인하고 **같은 브랜치에 커밋해서 push**한다
                (`git switch`/`checkout`은 하지 않는다 — 이미 올바른 브랜치다). 커밋 메시지는
                `fix: <무엇을 왜>` 한 줄 + 무엇이 실패했는지. push하면 게이트가 다시 돌고,
-               초록이면 `auto-merge.yml`이 머지한다. `gh pr merge`는 부르지 않는다.
+               초록이면 `enable-auto-merge.yml`이 머지한다. `gh pr merge`는 부르지 않는다.
 
             5. 무엇을 고쳤는지 PR에 코멘트로 1~3줄 남긴다.
           claude_args: >-

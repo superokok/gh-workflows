@@ -31,7 +31,7 @@ name: Preview Smoke (reusable)
 #   Vercel → Project Settings → Deployment Protection → **Protection Bypass for Automation**
 #   에서 시크릿을 만들고 GitHub Secret `VERCEL_AUTOMATION_BYPASS_SECRET`으로 등록하면 동작한다.
 #   시크릿이 없으면 이 job은 통과한다(인프라 미설정으로 모든 머지를 막는 건 과하다). 다만
-#   **조용히** 통과하지는 않는다 — auto-merge.yml이 이 job을 차단 게이트로 보는 구성이라면
+#   **조용히** 통과하지는 않는다 — enable-auto-merge.yml이 이 job을 차단 게이트로 보는 구성이라면
 #   "스킵됐다"가 안 보이면 런타임 검증이 통째로 사라진 걸 아무도 모르게 되므로, warning
 #   애노테이션으로 PR 체크 화면에 남긴다.
 #
