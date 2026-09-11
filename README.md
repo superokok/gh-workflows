@@ -57,6 +57,46 @@ Claude GitHub App 설치 토큰을 못 쓰고 PAT로 우회했던 원래 이유�
 > 트리거한 실행이 `Workflow initiated by non-human actor`로 거부된다 — 봇이 붙인 `agent`
 > 라벨로 깨어나는 경로가 조용히 죽는다.
 
+### 소비 저장소에 자격증명 뿌리기 — `scripts/sync-secrets.sh`
+
+개인 계정에는 조직 secret이 없어서 **저장소마다** 등록해야 한다. 저장소당 셋이다:
+`AGENT_APP_ID`, `AGENT_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`.
+
+> App 전환이 없앤 건 *저장소 목록 갱신*과 *GitHub 토큰 만료*지 등록 자체가 아니다 —
+> 오히려 secret 개수는 2개에서 3개로 늘었다. 등록 자체를 없애려면 조직(Team 이상)이
+> 필요한데, Free 조직은 private 저장소에 브랜치 보호가 없어 머지 게이트가 통째로
+> 사라진다. 그래서 구조를 바꾸는 대신 스크립트로 자동화한다.
+
+```bash
+# 현황 점검 (읽기 전용, 값 불필요). 빠진 게 있으면 non-zero로 끝난다.
+scripts/sync-secrets.sh --check
+
+# 등록/교체 — 값을 하나씩 물어본다 (토큰은 화면에 안 찍히고, 쓰기 전에 한 번 더 확인한다)
+scripts/sync-secrets.sh
+
+# 새 저장소 하나만
+scripts/sync-secrets.sh superokok/new-repo
+```
+
+**빈 입력은 "그 secret은 건드리지 않음"이다** — 하나만 교체할 때 나머지는 Enter로 넘긴다.
+무인 실행이 필요하면 `AGENT_APP_ID` · `AGENT_APP_PEM`(파일 경로) · `CLAUDE_CODE_OAUTH_TOKEN`을
+환경변수로 미리 주면 묻지 않는다.
+
+
+**`--check`가 핵심이다.** 손으로 뿌리면 토큰 교체 때 일부만 갱신되고 그 저장소의 루프만
+조용히 멈춘다 — 침묵은 정상과 구별되지 않는다. 교체 뒤 `--check` 한 번이면 끝난다.
+
+**자동으로 돌지 않는다 — 사람이 실행한다.** 개인 계정에는 "저장소 생성" 이벤트를 다른
+저장소에서 받을 방법이 없어서(조직 웹훅이 필요하다), 자동화해도 결국 누군가 트리거해야 한다.
+새 저장소가 생기면 위 명령 한 번 + `DEFAULT_REPOS`에 한 줄 추가다. 후자를 빠뜨리면
+`--check`가 그 저장소를 안 본다.
+
+**GitHub secret은 되읽을 수 없다.** 그래서 어떤 도구를 만들든 값은 사람이나 외부 저장소
+(Bitwarden 등)에서 와야 한다 — 마스터 사본을 한 곳에 두는 이유가 그거다.
+
+**`CLAUDE_CODE_OAUTH_TOKEN`에는 여전히 만료가 있다** — Anthropic 쪽 자격증명이라 App과
+무관하다. GitHub 쪽 교체가 사라졌을 뿐이지 교체가 통째로 없어진 건 아니다.
+
 ### 알림이 하나 바뀐다
 
 `release-pr.yml`이 여는 릴리스 PR의 작성자가 사람에서 봇이 된다. 예전엔 "자기 자신의 행동"
