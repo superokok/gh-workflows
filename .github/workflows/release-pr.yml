@@ -11,10 +11,15 @@ name: Release PR (develop → main) (reusable)
 #
 # 이 워크플로우는 **PR을 열기만 한다.** 머지는 여전히 사람이 한다(ADR 0003·0008의 사람 게이트).
 #
-# ── 이 워크플로우는 알림을 보내지 않는다 (2026-09-06) ─────────────────────────
-# PR 생성/갱신은 무음이다 — GitHub은 PR 본문·제목 수정이나 커밋 추가에 알림을 보내지 않고,
-# PR 자체도 AGENT_WORKFLOW_TOKEN(사용자 계정 PAT)으로 만들어 "자기 자신의 행동"이라 알림이
-# 애초에 안 간다.
+# ── 알림 (2026-09-06 무음 → App 전환으로 일부 변경) ──────────────────────────
+# **갱신은 여전히 무음이다** — GitHub은 PR 본문·제목 수정이나 커밋 추가에 알림을 보내지
+# 않는다. 이 워크플로우는 PR 하나를 열어두고 갱신하는 구조라 대부분의 시간이 여기 해당한다.
+#
+# **바뀐 것: 새 릴리스 PR이 "열릴 때"는 알림이 간다.** 예전엔 사용자 계정 PAT로 만들어
+# "자기 자신의 행동"이라 알림이 안 갔는데, App 봇이 작성자가 되면서 그렇지 않게 됐다.
+# 빈도는 머지마다가 아니라 **릴리스 주기마다 한 번**(직전 릴리스를 머지한 직후)이다.
+# 이 정도는 "찌르지 않는다"는 원래 의도에서 크게 벗어나지 않는다고 보고 받아들였다 —
+# 거슬리면 저장소 watch를 "Participating and @mentions"로 낮추면 된다.
 #
 # 정기 리마인더(주간 cron)를 넣었다가 뺐다. 아무 사건도 없는데 도착하는 알림은 무시당한다 —
 # 사용자 본인이 "받아도 무시할 것 같다"고 했고 그 판단이 맞다. **"지금 배포할 때인가"는
@@ -48,15 +53,39 @@ jobs:
   release-pr:
     runs-on: ubuntu-latest
     steps:
+      # ── 자격증명: PAT가 아니라 GitHub App 설치 토큰 ──────────────────────────
+      # App은 private key라 **만료가 없고**, 설치를 "All repositories"로 두면 새 저장소가
+      # 자동으로 포함돼 저장소 목록을 갱신할 일이 없다. fine-grained PAT가 강제하던 1년
+      # 교체와 저장소별 접근 목록 관리가 둘 다 사라진다.
+      #
+      # **자동 GITHUB_TOKEN과 달리 App 토큰으로 만든 이벤트는 다른 워크플로우를 트리거한다.**
+      # 이 루프가 PAT를 쓰던 이유가 정확히 그거였고(라벨·머지·push가 다음 워크플로우를 깨워야
+      # 한다), App은 그 성질을 그대로 갖는다.
+      #
+      # `app-id`(숫자)가 아니라 `client-id`를 쓴다. v3의 권장이기도 하지만, 실질적인 이유는
+      # **App ID와 Installation ID가 둘 다 숫자라 구별이 안 된다**는 것이다. 설치 화면 URL의
+      # 숫자를 App ID로 착각해 넣으면 JWT의 iss가 앱을 가리키지 않아
+      # `A JSON web token could not be decoded`로 죽는다(2026-09-11 실제로 겪었다).
+      # Client ID는 `Iv23…` 형태라 그 착각이 성립하지 않는다.
+      #
+      # App에 줘야 하는 권한: Contents / Pull requests / Issues / **Workflows** = write.
+      # Workflows가 없으면 `.github/workflows/*` 커밋이 거부된다 — Claude GitHub App 설치
+      # 토큰을 못 쓰고 PAT로 갔던 원래 이유가 이것이다(ADR 0007 "알려진 제약").
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: 릴리스 PR 생성/갱신 (알림 없음)
         id: upsert
         env:
-          GH_TOKEN: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PRE_MERGE_NOTE: ${{ inputs.pre-merge-note }}
         run: |

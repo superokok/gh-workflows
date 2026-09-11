@@ -6,9 +6,10 @@ name: Claude Agent (issue → PR) (reusable)
 #
 # 전제(리포 설정 — 코드 아님):
 #  - Claude GitHub App 설치 + secrets.CLAUDE_CODE_OAUTH_TOKEN (claude /install-github-app)
-#  - secrets.AGENT_WORKFLOW_TOKEN: repo+workflow 스코프 PAT (2026-09-05, docs/adr/0007
-#    "알려진 제약"). Claude GitHub App 설치 토큰엔 workflows 스코프가 없어
-#    `.github/workflows/*` 파일 커밋이 거부됐다 — 이 PAT로 그 제약을 없앤다.
+#  - secrets.AGENT_APP_CLIENT_ID / AGENT_APP_PRIVATE_KEY: 이 루프 전용 GitHub App.
+#    Workflows 권한이 있어야 `.github/workflows/*` 커밋이 거부되지 않는다 — Claude
+#    GitHub App 설치 토큰엔 그게 없어서 원래는 PAT로 우회했고(docs/adr/0007 "알려진 제약"),
+#    자체 App은 그 권한을 직접 줄 수 있어 PAT 없이 해결된다.
 #    secrets.GITHUB_TOKEN은 절대 안 쓴다(그 토큰 커밋엔 GitHub이 CI를 안 돌림).
 #  - Settings → General → Allow auto-merge
 #  - 브랜치 보호 + 'agent' 라벨 존재
@@ -81,15 +82,39 @@ jobs:
     env:
       DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
     steps:
+      # ── 자격증명: PAT가 아니라 GitHub App 설치 토큰 ──────────────────────────
+      # App은 private key라 **만료가 없고**, 설치를 "All repositories"로 두면 새 저장소가
+      # 자동으로 포함돼 저장소 목록을 갱신할 일이 없다. fine-grained PAT가 강제하던 1년
+      # 교체와 저장소별 접근 목록 관리가 둘 다 사라진다.
+      #
+      # **자동 GITHUB_TOKEN과 달리 App 토큰으로 만든 이벤트는 다른 워크플로우를 트리거한다.**
+      # 이 루프가 PAT를 쓰던 이유가 정확히 그거였고(라벨·머지·push가 다음 워크플로우를 깨워야
+      # 한다), App은 그 성질을 그대로 갖는다.
+      #
+      # `app-id`(숫자)가 아니라 `client-id`를 쓴다. v3의 권장이기도 하지만, 실질적인 이유는
+      # **App ID와 Installation ID가 둘 다 숫자라 구별이 안 된다**는 것이다. 설치 화면 URL의
+      # 숫자를 App ID로 착각해 넣으면 JWT의 iss가 앱을 가리키지 않아
+      # `A JSON web token could not be decoded`로 죽는다(2026-09-11 실제로 겪었다).
+      # Client ID는 `Iv23…` 형태라 그 착각이 성립하지 않는다.
+      #
+      # App에 줘야 하는 권한: Contents / Pull requests / Issues / **Workflows** = write.
+      # Workflows가 없으면 `.github/workflows/*` 커밋이 거부된다 — Claude GitHub App 설치
+      # 토큰을 못 쓰고 PAT로 갔던 원래 이유가 이것이다(ADR 0007 "알려진 제약").
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
       # 이슈 이벤트의 기본 체크아웃은 default 브랜치라 작업 기준이 어긋날 수 있다 →
       # base-branch를 직접 체크아웃한다. 여기서 에이전트가 그 위에 작업 브랜치를 딴다.
-      # token을 AGENT_WORKFLOW_TOKEN(workflow 스코프 PAT)으로 지정 - 기본 GITHUB_TOKEN엔
-      # 그 스코프가 없어 이 체크아웃 이후 커밋에서 .github/workflows/* 변경이 거부된다.
+      # token을 App 설치 토큰으로 지정 - 기본 GITHUB_TOKEN엔 Workflows 권한이 없어
+      # 이 체크아웃 이후 커밋에서 .github/workflows/* 변경이 거부된다.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.base-branch }}
-          token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       # 검증 커맨드를 러너에서 바로 돌릴 수 있게 준비 (check.yml과 동일 구성)
       - uses: actions/setup-node@v4
@@ -102,17 +127,18 @@ jobs:
       - if: inputs.install != '' && inputs.prepare != ''
         run: ${{ inputs.prepare }}
 
-      # github_token엔 AGENT_WORKFLOW_TOKEN(workflow 스코프 PAT)을 넘긴다 - secrets.GITHUB_TOKEN을
-      # 넘기면 그걸로 만든 커밋에는 GitHub이 CI를 안 돌리므로(문서 명시) 그건 절대 쓰지 않는다.
-      # 이 PAT는 사람 계정 소유라 그 제약이 없고, workflow 스코프가 있어 .github/workflows/*도 커밋 가능.
+      # github_token엔 App 설치 토큰을 넘긴다 - secrets.GITHUB_TOKEN을 넘기면 그걸로 만든
+      # 커밋에는 GitHub이 CI를 안 돌리므로(문서 명시) 그건 절대 쓰지 않는다. App 토큰은
+      # 그 제약이 없고(이벤트가 워크플로우를 트리거한다), Workflows 권한이 있어
+      # .github/workflows/*도 커밋 가능하다.
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.AGENT_WORKFLOW_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
           # 봇이 붙인 `agent` 라벨(리뷰의 후속 이슈 자동 착수 등)로 깨어나면 그 issues: labeled
           # 이벤트의 actor도 봇이라 "Workflow initiated by non-human actor"로 거부된다.
           # 배경은 README.md "알아둘 것" 참고.
-          allowed_bots: "claude"
+          allowed_bots: "claude,superokok-agent-ops"
           # 2026-09-05: 이 job이 결정론적으로 즉사하는데(첫 턴에서 is_error, duration 384ms,
           # total_cost_usd 0, modelUsage {} — 모델 호출 자체가 안 됨) 로그가 가려져 원인이 안 보인다.
           # 액션이 안내하는 대로 전체 출력을 켠다. 같은 토큰을 쓰는 claude-review.yml은 정상

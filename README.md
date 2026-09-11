@@ -17,22 +17,25 @@
 - **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
   auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
 - 라벨 `do-not-merge`, `agent` (`review-followup` · `followup-pr`은 워크플로우가 알아서 만든다)
-- Secrets: `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_WORKFLOW_TOKEN`(repo+workflow 스코프 PAT),
-  `DOTENV_PRIVATE_KEY`(dotenvx 쓸 때), `VERCEL_AUTOMATION_BYPASS_SECRET`(프리뷰 스모크 쓸 때)
+- **이 루프 전용 GitHub App** + Secrets `AGENT_APP_CLIENT_ID` / `AGENT_APP_PRIVATE_KEY`
+  (아래 "에이전트 자격증명" 참고)
+- Secrets: `CLAUDE_CODE_OAUTH_TOKEN`, `DOTENV_PRIVATE_KEY`(dotenvx 쓸 때),
+  `VERCEL_AUTOMATION_BYPASS_SECRET`(프리뷰 스모크 쓸 때)
 
 > **`secrets: inherit`을 반드시 넘긴다.** 재사용 워크플로우는 호출부의 시크릿을 자동으로
 > 물려받지 않는다. 빼먹으면 조용히 인증이 없는 채로 돌다 실패한다.
 
 ## 새 프로젝트에 붙이기
 
-붙이는 일은 **4층**인데, 이 저장소를 부르는 건 그중 1층뿐이다.
+붙이는 일은 **5층**인데, 이 저장소를 부르는 건 그중 1층뿐이다.
 
 | 층 | 무엇 | 어떻게 |
 |---|---|---|
 | 1. 로직 | 여기 재사용 워크플로우 8개 | `uses:`로 부르면 끝 |
 | 2. 호출부 | 소비 프로젝트 `.github/workflows/` | **복사 + 조정** (트리거·권한·`risk-paths`는 프로젝트마다 다르다) |
 | 3. 에이전트 | `.claude/settings.json` · `hooks/**` · `skills/steward` | **복사**. `vitest.config`의 include에 `.claude/hooks/*.test.ts`를 넣는 것을 잊지 말 것 — 빠뜨리면 훅 회귀 테스트가 **조용히 안 돈다** |
-| 4. 리포 설정 | 라벨 · auto-merge · 브랜치 보호 · 시크릿 | **복사 불가** → 아래 스크립트 |
+| 4. 리포 설정 | 라벨 · auto-merge · 브랜치 보호 | **복사 불가** → `bootstrap-repo.sh` |
+| 5. 자격증명 | App 시크릿 · Claude 토큰 | **복사 불가** → `sync-secrets.sh` |
 
 ```bash
 scripts/bootstrap-repo.sh <owner/repo> --dry-run
@@ -40,7 +43,9 @@ scripts/bootstrap-repo.sh <owner/repo> --dry-run
 
 4층을 한 번에 건다(멱등, 여러 번 돌려도 된다). 라벨 5개, auto-merge 켜기, 통합 브랜치 생성,
 브랜치 보호(PR 필수 · 승인 0 · force push/삭제 차단). **스크립트가 못 하는 것**(GitHub App 설치,
-`AGENT_WORKFLOW_TOKEN` 등 시크릿, Vercel 설정)은 끝에 목록으로 출력한다.
+Vercel 설정)은 끝에 목록으로 출력한다.
+
+5층(자격증명)은 `scripts/sync-secrets.sh`가 맡는다 — 아래 "에이전트 자격증명" 참고.
 
 이 층이 사람이 가장 잘 빠뜨리는 곳이고, **빠뜨리면 전부 조용히 안 돈다** — 라벨이 없으면
 에이전트가 안 깨어나고, auto-merge가 꺼져 있으면 `gh pr merge --auto`가 거부되며, 브랜치 보호가
@@ -55,6 +60,93 @@ base와 이름을 보고 안전하게 한다.
 > **템플릿 저장소로 굳히는 건 아직이다.** 표본이 kitchen-tempo 하나뿐이라, 무엇이 진짜 공통이고
 > 무엇이 그 프로젝트 전용(Vercel·Neon·Prisma·Capacitor, 스킬 4개 중 3개)인지 아직 못 가린다.
 > 두 번째 프로젝트를 실제로 붙여보고 그 경계를 근거로 굳힌다.
+
+## 에이전트 자격증명 — GitHub App
+
+워크플로우들은 `actions/create-github-app-token@v3`로 **App 설치 토큰**을 job마다 발급해
+쓴다. 예전엔 사람 계정의 fine-grained PAT(`AGENT_WORKFLOW_TOKEN`)였다.
+
+**왜 `secrets.GITHUB_TOKEN`을 못 쓰나**: 그 토큰으로 만든 이벤트는 다른 워크플로우를
+트리거하지 않는다(GitHub 플랫폼 제약). 라벨 하나가 다음 워크플로우를 깨워야 도는 루프라
+이게 치명적이다. **App 설치 토큰에는 그 제약이 없다** — PAT를 쓰던 이유가 그거였고 App도
+같은 성질을 갖는다.
+
+**왜 PAT에서 옮겼나**: fine-grained PAT는 최대 1년으로 만료가 강제되고, 저장소를 추가할
+때마다 토큰의 Repository access 목록을 갱신해야 한다. App은 private key라 만료가 없고,
+설치를 *All repositories*로 두면 새 저장소가 자동으로 포함된다.
+
+### App 설정
+
+| 항목 | 값 |
+|---|---|
+| 이름 | `superokok-agent-ops` (봇 actor가 `superokok-agent-ops[bot]`이 된다) |
+| 식별자 | **Client ID**(`Iv23…`). App ID가 아니다 — 아래 주의 참고 |
+| Repository permissions | Contents: **Read and write** |
+| | Pull requests: **Read and write** |
+| | Issues: **Read and write** |
+| | **Workflows: Read and write** |
+| 설치 범위 | All repositories |
+
+**Workflows 권한이 핵심이다.** 없으면 `.github/workflows/*`를 건드리는 커밋이 거부된다 —
+Claude GitHub App 설치 토큰을 못 쓰고 PAT로 우회했던 원래 이유가 정확히 이것이다.
+
+> **App 이름을 다르게 지으면** `claude-agent`·`claude-fix`·`claude-review`의
+> `allowed_bots: "claude,superokok-agent-ops"`에서 뒤쪽 슬러그를 같이 바꿔야 한다. 안 바꾸면 그 App이
+> 트리거한 실행이 `Workflow initiated by non-human actor`로 거부된다 — 봇이 붙인 `agent`
+> 라벨로 깨어나는 경로가 조용히 죽는다.
+
+> **App ID가 아니라 Client ID를 쓴다.** App 설정 페이지에는 숫자인 App ID와 `Iv23…` 형태의
+> Client ID가 같이 보이고, 설치 화면 URL(`/settings/installations/<숫자>`)에도 숫자가 있다.
+> **App ID와 Installation ID가 둘 다 숫자라 구별이 안 된다** — 후자를 넣으면 JWT의 `iss`가
+> 앱을 가리키지 않아 `A JSON web token could not be decoded`로 죽는다(2026-09-11 실제로 겪었다).
+> 에러 메시지가 키 문제처럼 읽혀서 엉뚱한 곳을 보게 된다.
+> `client-id`는 접두가 고정이라 그 착각이 성립하지 않고, v3의 권장 방식이기도 하다.
+
+### 소비 저장소에 자격증명 뿌리기 — `scripts/sync-secrets.sh`
+
+개인 계정에는 조직 secret이 없어서 **저장소마다** 등록해야 한다. 저장소당 셋이다:
+`AGENT_APP_CLIENT_ID`, `AGENT_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`.
+
+> App 전환이 없앤 건 *저장소 목록 갱신*과 *GitHub 토큰 만료*지 등록 자체가 아니다 —
+> 오히려 secret 개수는 2개에서 3개로 늘었다. 등록 자체를 없애려면 조직(Team 이상)이
+> 필요한데, Free 조직은 private 저장소에 브랜치 보호가 없어 머지 게이트가 통째로
+> 사라진다. 그래서 구조를 바꾸는 대신 스크립트로 자동화한다.
+
+```bash
+# 현황 점검 (읽기 전용, 값 불필요). 빠진 게 있으면 non-zero로 끝난다.
+scripts/sync-secrets.sh --check
+
+# 등록/교체 — 값을 하나씩 물어본다 (토큰은 화면에 안 찍히고, 쓰기 전에 한 번 더 확인한다)
+scripts/sync-secrets.sh
+
+# 새 저장소 하나만
+scripts/sync-secrets.sh superokok/new-repo
+```
+
+**빈 입력은 "그 secret은 건드리지 않음"이다** — 하나만 교체할 때 나머지는 Enter로 넘긴다.
+무인 실행이 필요하면 `AGENT_APP_CLIENT_ID` · `AGENT_APP_PEM`(파일 경로) · `CLAUDE_CODE_OAUTH_TOKEN`을
+환경변수로 미리 주면 묻지 않는다.
+
+
+**`--check`가 핵심이다.** 손으로 뿌리면 토큰 교체 때 일부만 갱신되고 그 저장소의 루프만
+조용히 멈춘다 — 침묵은 정상과 구별되지 않는다. 교체 뒤 `--check` 한 번이면 끝난다.
+
+**자동으로 돌지 않는다 — 사람이 실행한다.** 개인 계정에는 "저장소 생성" 이벤트를 다른
+저장소에서 받을 방법이 없어서(조직 웹훅이 필요하다), 자동화해도 결국 누군가 트리거해야 한다.
+새 저장소가 생기면 위 명령 한 번 + `DEFAULT_REPOS`에 한 줄 추가다. 후자를 빠뜨리면
+`--check`가 그 저장소를 안 본다.
+
+**GitHub secret은 되읽을 수 없다.** 그래서 어떤 도구를 만들든 값은 사람이나 외부 저장소
+(Bitwarden 등)에서 와야 한다 — 마스터 사본을 한 곳에 두는 이유가 그거다.
+
+**`CLAUDE_CODE_OAUTH_TOKEN`에는 여전히 만료가 있다** — Anthropic 쪽 자격증명이라 App과
+무관하다. GitHub 쪽 교체가 사라졌을 뿐이지 교체가 통째로 없어진 건 아니다.
+
+### 알림이 하나 바뀐다
+
+`release-pr.yml`이 여는 릴리스 PR의 작성자가 사람에서 봇이 된다. 예전엔 "자기 자신의 행동"
+이라 알림이 안 갔는데 이제 **새 릴리스 PR이 열릴 때 한 번** 간다(갱신은 여전히 무음이다 —
+GitHub은 본문 수정·커밋 추가에 알림을 보내지 않는다). 빈도는 릴리스 주기당 1회다.
 
 ## 호출부 (프로젝트 `.github/workflows/`)
 
@@ -263,9 +355,11 @@ jobs:
   **새 이슈를 만들지 않고 원래 이슈에 코멘트로 덧붙인다**(닫혔으면 reopen). 계보
   하나당 이슈 1개로 고정된다. 깊이 2 이상의 지적은 `agent` 라벨을 안 붙이므로
   거기서만 사람이 본다. 고위험 차단(`do-not-merge`)은 깊이와 무관하게 항상 동작한다.
-- **`claude-review.yml`은 `AGENT_WORKFLOW_TOKEN`으로 라벨을 붙인다.** `GITHUB_TOKEN`으로
-  만든 이벤트는 다른 워크플로우를 트리거하지 않아(GitHub 플랫폼 제약), 그 토큰으로
-  `agent`를 붙이면 `claude-agent.yml`이 깨어나지 않아 이슈가 그대로 방치된다.
+- **`claude-review.yml`은 App 설치 토큰으로 라벨을 붙인다.** `GITHUB_TOKEN`으로 만든
+  이벤트는 다른 워크플로우를 트리거하지 않아(GitHub 플랫폼 제약), 그 토큰으로 `agent`를
+  붙이면 `claude-agent.yml`이 깨어나지 않아 이슈가 그대로 방치된다. App 토큰엔 그 제약이
+  없다. 그리고 이때 actor가 `superokok-agent-ops[bot]`이 되므로 `allowed_bots`에 그 슬러그가
+  들어 있어야 한다 — 안 그러면 `Workflow initiated by non-human actor`로 거부된다.
 
 - **`workflow_run` / `status` / `deployment_status` 트리거는 default 브랜치(`main`)에 있는
   호출부 파일이 동작한다.** 즉 그 파일들을 고치면 `develop`→`main` 릴리스 후에 효력이 생긴다.
@@ -297,7 +391,8 @@ jobs:
 >
 > ```bash
 > gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo superokok/gh-workflows
-> gh secret set AGENT_WORKFLOW_TOKEN    --repo superokok/gh-workflows
+> gh secret set AGENT_APP_CLIENT_ID            --repo superokok/gh-workflows
+> gh secret set AGENT_APP_PRIVATE_KEY   --repo superokok/gh-workflows < app-private-key.pem
 > ```
 >
 > Claude GitHub App도 이 저장소에 설치돼 있어야 인라인 리뷰 코멘트가 달린다.

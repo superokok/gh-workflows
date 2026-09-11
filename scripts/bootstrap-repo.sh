@@ -161,13 +161,17 @@ fi
 step "여기서 끝나지 않는다 — 직접 하셔야 하는 것"
 cat <<EOF
   1) Claude GitHub App + 토큰
-       로컬에서 \`claude\` 실행 → /install-github-app
-       → CLAUDE_CODE_OAUTH_TOKEN 시크릿과 claude.yml PR이 만들어집니다. 머지하세요.
+       github.com/apps/claude → Configure → 이 저장소를 Repository access에 추가
+       토큰은 \`claude setup-token\` 으로 발급해 위 2번 스크립트에서 함께 넣습니다.
+       ※ /install-github-app 도 되지만 claude.yml 을 새로 만들어 PR을 엽니다 —
+          호출부를 이미 복사해 뒀다면 중복이라 닫아야 합니다.
 
-  2) AGENT_WORKFLOW_TOKEN (classic PAT, repo + workflow 스코프)
-       gh secret set AGENT_WORKFLOW_TOKEN --repo $REPO
+  2) 에이전트 App 자격증명 (AGENT_APP_CLIENT_ID / AGENT_APP_PRIVATE_KEY)
+       scripts/sync-secrets.sh $REPO
+       ※ App을 All repositories로 설치해 두면 저장소별 추가 작업이 없습니다.
+          Workflows 권한이 있어야 .github/workflows/* 커밋이 거부되지 않습니다.
        ※ GITHUB_TOKEN이 붙인 라벨은 다른 워크플로우를 깨우지 않습니다(GitHub 플랫폼 제약).
-          이 PAT가 없으면 drain-queue가 이슈를 깨워도 에이전트가 안 돕니다.
+          이 자격증명이 없으면 drain-queue가 이슈를 깨워도 에이전트가 안 돕니다.
 
   3) 쓰는 것만:
        gh secret set VERCEL_AUTOMATION_BYPASS_SECRET --repo $REPO   # preview-smoke
