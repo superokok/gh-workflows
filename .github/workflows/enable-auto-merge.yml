@@ -42,6 +42,14 @@ jobs:
     if: >-
       github.event.pull_request.base.ref == inputs.base-branch &&
       github.event.pull_request.draft == false
+    # 같은 PR에 대한 실행을 직렬화한다. `opened` 직후 `synchronize`가 바로 이어지거나
+    # 짧은 시간에 push가 겹치면 이 job이 동시에 여러 개 돌 수 있고, 그러면 라벨·코멘트
+    # 중복 방지 체크와 `--disable-auto`/`--auto` 호출이 서로 경합해 auto-merge 상태가
+    # 꼬일 수 있다. cancel-in-progress는 켜지 않는다 — 중간에 잘리면 "auto-merge를 껐지만
+    # 코멘트는 못 단" 상태로 남을 수 있어, 그냥 줄 세워 마지막 push 기준으로 다시 판정하게 한다.
+    concurrency:
+      group: enable-auto-merge-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write        # auto-merge 활성화

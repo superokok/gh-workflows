@@ -212,7 +212,7 @@ jobs:
             7. **위험 구간을 건드렸으면** (${{ inputs.risk-areas }})
                → `gh pr edit <n> --add-label do-not-merge` 하고, PR에 "위험 구간 — diff 리뷰 후
                사람이 수동 머지" 코멘트를 단다. **위험 구간이 아니면** 라벨 없이 그대로 둔다
-               (게이트가 초록이면 `auto-merge.yml`이 자동 머지). 직접 `gh pr merge`는 부르지 않는다.
+               (게이트가 초록이면 `enable-auto-merge.yml`이 자동 머지). 직접 `gh pr merge`는 부르지 않는다.
             8. 운영 반영(릴리스) PR은 절대 만들지 않는다. 그건 사람이 한다.
 
             네가 만지는 파일의 린트 에러는 0으로 유지한다.
