@@ -57,13 +57,19 @@ jobs:
       # 이 루프가 PAT를 쓰던 이유가 정확히 그거였고(라벨·머지·push가 다음 워크플로우를 깨워야
       # 한다), App은 그 성질을 그대로 갖는다.
       #
+      # `app-id`(숫자)가 아니라 `client-id`를 쓴다. v3의 권장이기도 하지만, 실질적인 이유는
+      # **App ID와 Installation ID가 둘 다 숫자라 구별이 안 된다**는 것이다. 설치 화면 URL의
+      # 숫자를 App ID로 착각해 넣으면 JWT의 iss가 앱을 가리키지 않아
+      # `A JSON web token could not be decoded`로 죽는다(2026-09-11 실제로 겪었다).
+      # Client ID는 `Iv23…` 형태라 그 착각이 성립하지 않는다.
+      #
       # App에 줘야 하는 권한: Contents / Pull requests / Issues / **Workflows** = write.
       # Workflows가 없으면 `.github/workflows/*` 커밋이 거부된다 — Claude GitHub App 설치
       # 토큰을 못 쓰고 PAT로 갔던 원래 이유가 이것이다(ADR 0007 "알려진 제약").
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
-          app-id: ${{ secrets.AGENT_APP_ID }}
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
 
       - name: 위험 경로면 사람에게, 아니면 auto-merge 켜기

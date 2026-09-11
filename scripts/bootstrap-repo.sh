@@ -166,7 +166,7 @@ cat <<EOF
        ※ /install-github-app 도 되지만 claude.yml 을 새로 만들어 PR을 엽니다 —
           호출부를 이미 복사해 뒀다면 중복이라 닫아야 합니다.
 
-  2) 에이전트 App 자격증명 (AGENT_APP_ID / AGENT_APP_PRIVATE_KEY)
+  2) 에이전트 App 자격증명 (AGENT_APP_CLIENT_ID / AGENT_APP_PRIVATE_KEY)
        scripts/sync-secrets.sh $REPO
        ※ App을 All repositories로 설치해 두면 저장소별 추가 작업이 없습니다.
           Workflows 권한이 있어야 .github/workflows/* 커밋이 거부되지 않습니다.

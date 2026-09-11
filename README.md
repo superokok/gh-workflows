@@ -17,7 +17,7 @@
 - **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
   auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
 - 라벨 `do-not-merge`, `agent` (`review-followup` · `followup-pr`은 워크플로우가 알아서 만든다)
-- **이 루프 전용 GitHub App** + Secrets `AGENT_APP_ID` / `AGENT_APP_PRIVATE_KEY`
+- **이 루프 전용 GitHub App** + Secrets `AGENT_APP_CLIENT_ID` / `AGENT_APP_PRIVATE_KEY`
   (아래 "에이전트 자격증명" 참고)
 - Secrets: `CLAUDE_CODE_OAUTH_TOKEN`, `DOTENV_PRIVATE_KEY`(dotenvx 쓸 때),
   `VERCEL_AUTOMATION_BYPASS_SECRET`(프리뷰 스모크 쓸 때)
@@ -80,6 +80,7 @@ base와 이름을 보고 안전하게 한다.
 | 항목 | 값 |
 |---|---|
 | 이름 | `superokok-agent-ops` (봇 actor가 `superokok-agent-ops[bot]`이 된다) |
+| 식별자 | **Client ID**(`Iv23…`). App ID가 아니다 — 아래 주의 참고 |
 | Repository permissions | Contents: **Read and write** |
 | | Pull requests: **Read and write** |
 | | Issues: **Read and write** |
@@ -94,10 +95,17 @@ Claude GitHub App 설치 토큰을 못 쓰고 PAT로 우회했던 원래 이유�
 > 트리거한 실행이 `Workflow initiated by non-human actor`로 거부된다 — 봇이 붙인 `agent`
 > 라벨로 깨어나는 경로가 조용히 죽는다.
 
+> **App ID가 아니라 Client ID를 쓴다.** App 설정 페이지에는 숫자인 App ID와 `Iv23…` 형태의
+> Client ID가 같이 보이고, 설치 화면 URL(`/settings/installations/<숫자>`)에도 숫자가 있다.
+> **App ID와 Installation ID가 둘 다 숫자라 구별이 안 된다** — 후자를 넣으면 JWT의 `iss`가
+> 앱을 가리키지 않아 `A JSON web token could not be decoded`로 죽는다(2026-09-11 실제로 겪었다).
+> 에러 메시지가 키 문제처럼 읽혀서 엉뚱한 곳을 보게 된다.
+> `client-id`는 접두가 고정이라 그 착각이 성립하지 않고, v3의 권장 방식이기도 하다.
+
 ### 소비 저장소에 자격증명 뿌리기 — `scripts/sync-secrets.sh`
 
 개인 계정에는 조직 secret이 없어서 **저장소마다** 등록해야 한다. 저장소당 셋이다:
-`AGENT_APP_ID`, `AGENT_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`.
+`AGENT_APP_CLIENT_ID`, `AGENT_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`.
 
 > App 전환이 없앤 건 *저장소 목록 갱신*과 *GitHub 토큰 만료*지 등록 자체가 아니다 —
 > 오히려 secret 개수는 2개에서 3개로 늘었다. 등록 자체를 없애려면 조직(Team 이상)이
@@ -116,7 +124,7 @@ scripts/sync-secrets.sh superokok/new-repo
 ```
 
 **빈 입력은 "그 secret은 건드리지 않음"이다** — 하나만 교체할 때 나머지는 Enter로 넘긴다.
-무인 실행이 필요하면 `AGENT_APP_ID` · `AGENT_APP_PEM`(파일 경로) · `CLAUDE_CODE_OAUTH_TOKEN`을
+무인 실행이 필요하면 `AGENT_APP_CLIENT_ID` · `AGENT_APP_PEM`(파일 경로) · `CLAUDE_CODE_OAUTH_TOKEN`을
 환경변수로 미리 주면 묻지 않는다.
 
 
@@ -383,7 +391,7 @@ jobs:
 >
 > ```bash
 > gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo superokok/gh-workflows
-> gh secret set AGENT_APP_ID            --repo superokok/gh-workflows
+> gh secret set AGENT_APP_CLIENT_ID            --repo superokok/gh-workflows
 > gh secret set AGENT_APP_PRIVATE_KEY   --repo superokok/gh-workflows < app-private-key.pem
 > ```
 >

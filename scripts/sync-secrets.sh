@@ -15,7 +15,7 @@
 #   scripts/sync-secrets.sh superokok/new-repo   # 물어보고 그 저장소에만 등록
 #
 # 값은 물어본다. 스크립트로 돌릴 땐 환경변수로 미리 주면 안 묻는다:
-#   AGENT_APP_ID              GitHub App의 App ID (숫자)
+#   AGENT_APP_CLIENT_ID       GitHub App의 Client ID (Iv23… 형태)
 #   AGENT_APP_PEM             private key .pem 파일 **경로** (값이 아니라 경로)
 #   CLAUDE_CODE_OAUTH_TOKEN   Anthropic 인증 토큰
 #
@@ -35,7 +35,7 @@ DEFAULT_REPOS=(
 
 # 이 루프가 요구하는 secret. preview-smoke(VERCEL_…)·dotenvx(DOTENV_…)는 프로젝트마다
 # 쓰고 안 쓰고가 갈려서 여기 넣지 않는다 — 없다고 루프가 멈추지 않는다.
-REQUIRED=(AGENT_APP_ID AGENT_APP_PRIVATE_KEY CLAUDE_CODE_OAUTH_TOKEN)
+REQUIRED=(AGENT_APP_CLIENT_ID AGENT_APP_PRIVATE_KEY CLAUDE_CODE_OAUTH_TOKEN)
 
 check_only=""
 [ "${1:-}" = "--check" ] && { check_only=1; shift; }
@@ -97,12 +97,20 @@ echo "대상 저장소: ${repos[*]}"
 echo "값을 비워두고 Enter를 치면 그 secret은 건드리지 않는다."
 echo
 
-if [ -z "${AGENT_APP_ID:-}" ]; then
-  read -r -p "App ID (github.com/settings/apps/superokok-agent-ops 상단, 숫자): " AGENT_APP_ID
+if [ -z "${AGENT_APP_CLIENT_ID:-}" ]; then
+  read -r -p "Client ID (github.com/settings/apps/… 의 Client ID, Iv23… 형태): " AGENT_APP_CLIENT_ID
 fi
-if [ -n "$AGENT_APP_ID" ]; then
-  case "$AGENT_APP_ID" in
-    *[!0-9]*) echo "App ID가 숫자가 아니다: $AGENT_APP_ID" >&2; exit 1 ;;
+# **App ID(숫자)를 넣는 걸 막는 검사다.** 예전엔 "숫자인가"만 봤는데, App ID와
+# Installation ID가 둘 다 숫자라 그 검사는 아무것도 못 걸렀다 — 설치 화면 URL의 숫자를
+# 넣고 `A JSON web token could not be decoded`로 죽는 걸 실제로 겪었다(2026-09-11).
+# Client ID는 접두가 고정이라 이 착각이 성립하지 않는다.
+if [ -n "$AGENT_APP_CLIENT_ID" ]; then
+  case "$AGENT_APP_CLIENT_ID" in
+    Iv*) ;;
+    *[!0-9]*) echo "Client ID 형식이 아니다: $AGENT_APP_CLIENT_ID" >&2; exit 1 ;;
+    *) echo "숫자를 넣었다: $AGENT_APP_CLIENT_ID" >&2
+       echo "App ID나 Installation ID가 아니라 **Client ID**(Iv23… 형태)가 필요하다." >&2
+       exit 1 ;;
   esac
 fi
 
@@ -129,7 +137,7 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   echo
 fi
 
-if [ -z "$AGENT_APP_ID" ] && [ -z "$AGENT_APP_PEM" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+if [ -z "$AGENT_APP_CLIENT_ID" ] && [ -z "$AGENT_APP_PEM" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
   echo "입력된 값이 없다. 아무것도 하지 않는다." >&2
   exit 1
 fi
@@ -137,7 +145,7 @@ fi
 # ── 확인 ────────────────────────────────────────────────────────────────────
 echo
 echo "등록할 것:"
-[ -n "$AGENT_APP_ID" ]            && echo "  - AGENT_APP_ID"
+[ -n "$AGENT_APP_CLIENT_ID" ]     && echo "  - AGENT_APP_CLIENT_ID"
 [ -n "$AGENT_APP_PEM" ]           && echo "  - AGENT_APP_PRIVATE_KEY  ($AGENT_APP_PEM)"
 [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && echo "  - CLAUDE_CODE_OAUTH_TOKEN"
 echo "대상: ${repos[*]}"
@@ -148,8 +156,8 @@ case "$ok" in y|Y|yes|YES) ;; *) echo "취소했다."; exit 1 ;; esac
 rc=0
 for r in "${repos[@]}"; do
   echo "→ $r"
-  if [ -n "$AGENT_APP_ID" ]; then
-    printf '%s' "$AGENT_APP_ID" | gh secret set AGENT_APP_ID --repo "$r" || rc=1
+  if [ -n "$AGENT_APP_CLIENT_ID" ]; then
+    printf '%s' "$AGENT_APP_CLIENT_ID" | gh secret set AGENT_APP_CLIENT_ID --repo "$r" || rc=1
   fi
   if [ -n "$AGENT_APP_PEM" ]; then
     gh secret set AGENT_APP_PRIVATE_KEY --repo "$r" < "$AGENT_APP_PEM" || rc=1
