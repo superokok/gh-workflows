@@ -76,22 +76,29 @@ step "저장소 머지 설정"
 # 지워서, `develop`→`main` 릴리스 PR을 머지하는 순간 **`develop` 자체가 삭제된다**
 # (2026-09-05 kitchen-tempo에서 실제로 겪고 복구함). 브랜치 정리는 `after-merge.yml`이
 # base와 이름을 보고 안전하게 한다.
-run gh api -X PATCH "repos/$REPO" \
+if run gh api -X PATCH "repos/$REPO" \
   -F allow_auto_merge=true \
   -F allow_squash_merge=true \
   -F allow_merge_commit=true \
-  -F delete_branch_on_merge=false
-ok "auto-merge 켬 / squash·merge commit 허용 / delete_branch_on_merge **끔**"
+  -F delete_branch_on_merge=false; then
+  ok "auto-merge 켬 / squash·merge commit 허용 / delete_branch_on_merge **끔**"
+else
+  warn "저장소 머지 설정 실패 — admin 권한을 확인하세요."
+fi
 
 # ── 3. 통합 브랜치 ───────────────────────────────────────────────────────────
 step "통합 브랜치"
 if gh api "repos/$REPO/git/ref/heads/$INTEGRATION" >/dev/null 2>&1; then
   ok "$INTEGRATION 이미 있음"
+elif base_sha=$(gh api "repos/$REPO/git/ref/heads/$PRODUCTION" --jq '.object.sha' 2>/dev/null) && [ -n "$base_sha" ]; then
+  if run gh api -X POST "repos/$REPO/git/refs" \
+    -f "ref=refs/heads/$INTEGRATION" -f "sha=$base_sha"; then
+    ok "$INTEGRATION 생성 ($PRODUCTION 기준)"
+  else
+    warn "$INTEGRATION 생성 실패 — admin 권한을 확인하세요."
+  fi
 else
-  base_sha=$(gh api "repos/$REPO/git/ref/heads/$PRODUCTION" --jq '.object.sha')
-  run gh api -X POST "repos/$REPO/git/refs" \
-    -f "ref=refs/heads/$INTEGRATION" -f "sha=$base_sha"
-  ok "$INTEGRATION 생성 ($PRODUCTION 기준)"
+  warn "$PRODUCTION 브랜치 SHA 조회 실패 — $INTEGRATION 생성을 건너뜁니다."
 fi
 
 # ── 4. 브랜치 보호 ───────────────────────────────────────────────────────────
