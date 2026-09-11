@@ -133,7 +133,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 에이전트(claude-agent.yml)가 만든 PR은 봇(app/claude)이 작성자라, 이게 없으면
           # "Workflow initiated by non-human actor" 로 거부된다. 리뷰 대상이 바로 그 PR들이므로 허용.
-          allowed_bots: "claude,agent-ops"
+          allowed_bots: "claude,superokok-agent-ops"
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
           prompt: |

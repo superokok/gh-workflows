@@ -140,7 +140,7 @@ jobs:
           # 봇이 push한 커밋(claude-agent가 연 PR 등)에서 도는 CI/Vercel이 workflow_run/status로
           # 이 job을 깨우면 그 이벤트의 actor도 봇이라 "Workflow initiated by non-human actor"로
           # 거부된다. 배경은 README.md "알아둘 것" 참고.
-          allowed_bots: "claude,agent-ops"
+          allowed_bots: "claude,superokok-agent-ops"
           prompt: |
             PR #${{ steps.target.outputs.pr }} 의 게이트가 실패했다. 원인을 찾아 고친다.
             PR 브랜치(`${{ steps.target.outputs.ref }}`)가 이미 체크아웃돼 있고 `npm ci`도 끝났다.

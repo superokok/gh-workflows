@@ -42,7 +42,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 이름 | `agent-ops` (봇 actor가 `agent-ops[bot]`이 된다) |
+| 이름 | `superokok-agent-ops` (봇 actor가 `superokok-agent-ops[bot]`이 된다) |
 | Repository permissions | Contents: **Read and write** |
 | | Pull requests: **Read and write** |
 | | Issues: **Read and write** |
@@ -53,7 +53,7 @@
 Claude GitHub App 설치 토큰을 못 쓰고 PAT로 우회했던 원래 이유가 정확히 이것이다.
 
 > **App 이름을 다르게 지으면** `claude-agent`·`claude-fix`·`claude-review`의
-> `allowed_bots: "claude,agent-ops"`에서 뒤쪽 슬러그를 같이 바꿔야 한다. 안 바꾸면 그 App이
+> `allowed_bots: "claude,superokok-agent-ops"`에서 뒤쪽 슬러그를 같이 바꿔야 한다. 안 바꾸면 그 App이
 > 트리거한 실행이 `Workflow initiated by non-human actor`로 거부된다 — 봇이 붙인 `agent`
 > 라벨로 깨어나는 경로가 조용히 죽는다.
 
@@ -248,7 +248,7 @@ jobs:
 - **`claude-review.yml`은 App 설치 토큰으로 라벨을 붙인다.** `GITHUB_TOKEN`으로 만든
   이벤트는 다른 워크플로우를 트리거하지 않아(GitHub 플랫폼 제약), 그 토큰으로 `agent`를
   붙이면 `claude-agent.yml`이 깨어나지 않아 이슈가 그대로 방치된다. App 토큰엔 그 제약이
-  없다. 그리고 이때 actor가 `agent-ops[bot]`이 되므로 `allowed_bots`에 그 슬러그가
+  없다. 그리고 이때 actor가 `superokok-agent-ops[bot]`이 되므로 `allowed_bots`에 그 슬러그가
   들어 있어야 한다 — 안 그러면 `Workflow initiated by non-human actor`로 거부된다.
 
 - **`workflow_run` / `status` / `deployment_status` 트리거는 default 브랜치(`main`)에 있는
