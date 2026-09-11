@@ -51,12 +51,19 @@ jobs:
     # 잘못 연결됐을 때 뒷정리가 엉뚱한 시점에 도는 걸 여기서 한 번 더 막는다.
     if: github.event.pull_request.state == 'closed'
     runs-on: ubuntu-latest
+    # GitHub Actions는 permissions를 job(워크플로우) 단위로만 선언할 수 있어 스텝별로
+    # 좁힐 수 없다 — 예: 코멘트만 게시하면 되는 스텝도 실행 중엔 이슈 닫기·브랜치 삭제
+    # 권한까지 쥔 GITHUB_TOKEN을 받는다(PR #24 리뷰 지적, #26). 스텝마다 job을 새로
+    # 쪼개면 이 파일을 한 잡으로 합친 이유(잡 단위 올림 과금, 4잡→1잡으로 34분→~11분)가
+    # 그대로 되살아나므로, 재검토 후 이 job에 실제로 필요한 최소 합집합만 유지하기로
+    # 했다 — 세 권한 모두 이 job의 어느 한 스텝에는 실제로 필요하다.
     permissions:
       contents: write        # 브랜치 삭제
       issues: write          # 이슈 닫기 · 큐 라벨
       pull-requests: write   # 머지 알림 코멘트
     steps:
       - name: 머지 완료 코멘트(Gmail 알림용 태그 포함)
+        id: notify
         if: ${{ !cancelled() && github.event.pull_request.merged == true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -104,6 +111,7 @@ jobs:
             | gh pr comment "$PR" --repo "$REPO" --body-file -
 
       - name: 본문의 close 키워드로 연결된 이슈 닫기
+        id: close-issues
         if: ${{ !cancelled() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == inputs.base-branch }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -131,6 +139,7 @@ jobs:
           done
 
       - name: 머지된 작업 브랜치 삭제
+        id: delete-branch
         if: ${{ !cancelled() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == inputs.base-branch && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref != inputs.base-branch && github.event.pull_request.head.ref != 'main' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -166,6 +175,7 @@ jobs:
   #
   # 하나만 깨운다. 여러 개를 한꺼번에 풀면 WIP 제한이 무의미해진다.
       - name: 판이 비었으면 대기 중인 이슈 하나를 깨운다
+        id: drain-queue
         if: ${{ !cancelled() }}
         env:
           # PAT를 쓴다 — GITHUB_TOKEN이 붙인 라벨은 `issues: labeled` 이벤트로
@@ -231,4 +241,33 @@ jobs:
             echo "::error::#$stalled 에 agent 라벨을 다시 붙이지 못했다 — 라벨이 빠진 채로 남았다"
             gh issue comment "$stalled" --repo "$REPO"               --body "⚠️ 정지 복구 중 agent 라벨 재부착에 실패했습니다. 라벨이 빠진 채로 남아있으니 수동 확인이 필요합니다." || true
             exit 1
+          fi
+
+      # 스텝을 합치며 잡 단위 성공/실패 가시성을 잃었다(PR #24 리뷰 지적, #26) — 스텝
+      # 하나만 실패해도 잡 전체가 빨간 X가 되어, 로그를 열기 전엔 어느 정리가 실패했는지
+      # 알 수 없다. 여기서 스텝별 outcome을 모아 요약에 남긴다.
+      - name: 정리 결과 요약 (실패한 스텝 표시)
+        if: always()
+        env:
+          NOTIFY: ${{ steps.notify.outcome }}
+          CLOSE_ISSUES: ${{ steps.close-issues.outcome }}
+          DELETE_BRANCH: ${{ steps.delete-branch.outcome }}
+          DRAIN_QUEUE: ${{ steps.drain-queue.outcome }}
+        run: |
+          set -euo pipefail
+
+          failed=""
+          for pair in "머지 알림:$NOTIFY" "이슈 닫기:$CLOSE_ISSUES" "브랜치 삭제:$DELETE_BRANCH" "큐 구동:$DRAIN_QUEUE"; do
+            name="${pair%%:*}"
+            outcome="${pair#*:}"
+            if [ "$outcome" = "failure" ]; then
+              failed="${failed}${failed:+, }$name"
+            fi
+          done
+
+          if [ -n "$failed" ]; then
+            echo "::error::뒷정리 중 실패: $failed (나머지 스텝은 서로 독립이라 그대로 진행됨)"
+            echo "### ⚠️ 뒷정리 일부 실패: $failed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ✅ 뒷정리 전부 성공(또는 조건 미충족으로 스킵)" >> "$GITHUB_STEP_SUMMARY"
           fi
