@@ -267,6 +267,16 @@ jobs:
 `claude.yml`(`@claude` 멘션 응답)은 `/install-github-app`이 프로젝트에 직접 만들어 주므로
 여기 없다. 배포(`deploy.yml`)·모바일 빌드도 프로젝트 고유라 각자 소유한다.
 
+> **`claude-agent`·`claude-fix`는 스택 커맨드를 입력으로 받는다 — Node + Prisma가 아니면
+> 반드시 넘긴다.** 기본값(`install: npm ci`, `prepare: npx prisma generate`,
+> `verify: npm run check`, `changelog-file: docs/BUSINESS_LOGIC.md`,
+> `plan-only-paths: prisma/`)은 원본인 kitchen-tempo 기준이다. `with:`를 통째로 생략하면
+> **그 기본값이 조용히 상속되고, 실패는 에이전트가 아니라 그 앞 준비 단계에서 난다** —
+> 액션이 시작조차 못 하므로 이슈는 라벨만 붙은 채 방치되고 아무 알림도 없다.
+> devDepth(Spring Boot + Next.js + Expo)가 2026-09-12에 정확히 이걸로 멈췄다:
+> prisma가 의존성에 없으니 `npx`가 최신 rc를 받아왔고 거기엔 `generate`가 없어 exit 2.
+> 다른 커맨드 문자열 입력과 같은 규칙으로, **빈 문자열이면 그 단계를 건너뛴다.**
+
 ## 알아둘 것
 
 - **`claude-agent`는 저장소당 하나만 돈다**(concurrency 그룹이 저장소 단위). 이슈별로 묶으면
