@@ -301,7 +301,7 @@ jobs:
       # 트리거하지 않아 CI가 안 돌고, "릴리스는 초록 + 사람" 게이트가 빈 껍데기가 된다.
       - name: 릴리스 PR 생성/갱신 (갱신은 알림 없음)
         id: release-pr
-        if: ${{ !cancelled() && inputs.release-target != '' && github.event.pull_request.merged == true }}
+        if: ${{ !cancelled() && inputs.release-target != '' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == inputs.base-branch }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -311,9 +311,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 어떤 base로 머지됐든 돈다 — 판정은 compare가 한다. 릴리스 PR 자신이 머지된
-          # 직후에도 이 스텝이 깨어나지만 그때는 ahead=0이라 아무 일도 하지 않는다.
-          ahead=$(gh api "repos/$REPO/compare/$TARGET...$BASE" --jq '.ahead_by')
+          # 릴리스 PR 자신이 머지된 직후에도 이 스텝이 깨어나지만 그때는 ahead=0이라
+          # 아무 일도 하지 않는다.
+          #
+          # ahead_by와 커밋 목록을 같은 compare 응답에서 뽑는다 — 따로 두 번 호출하면
+          # 그 사이 BASE가 앞서 나가는 레이스로 헤더 건수와 실제 목록이 어긋날 수 있다.
+          gh api "repos/$REPO/compare/$TARGET...$BASE" > "$RUNNER_TEMP/compare.json"
+          ahead=$(jq '.ahead_by' "$RUNNER_TEMP/compare.json")
           if [ "$ahead" -eq 0 ]; then
             echo "$BASE가 $TARGET과 같음 — 릴리스할 것 없음"; exit 0
           fi
@@ -324,8 +328,7 @@ jobs:
             printf '%s\n\n' "\`$BASE\` → \`$TARGET\` 운영 반영입니다. **머지하면 즉시 운영 배포 + DB 마이그레이션이 돕니다.**"
             if [ -n "$PRE_MERGE_NOTE" ]; then printf '%s\n\n' "$PRE_MERGE_NOTE"; fi
             printf '## 포함된 변경 (%s건)\n\n' "$ahead"
-            gh api "repos/$REPO/compare/$TARGET...$BASE" \
-              --jq '.commits[] | "- \(.commit.message | split("\n")[0])"'
+            jq -r '.commits[] | "- \(.commit.message | split("\n")[0])"' "$RUNNER_TEMP/compare.json"
             printf '\n---\n\n%s\n' '이 PR은 `after-merge.yml`이 자동으로 열고 갱신합니다(갱신에는 알림이 가지 않습니다). 머지는 사람이 합니다.'
           } > "$RUNNER_TEMP/release-body.md"
 
@@ -343,10 +346,16 @@ jobs:
           # `release-pr.yml`에는 `concurrency: release-pr`가 있었지만 이 잡에는 없다
           # (여기 concurrency를 걸면 뒷정리·큐 구동까지 같이 취소될 수 있어 넣지 않는다).
           # 그래서 check-then-act 경합이 원리적으로 가능하다 — 둘 다 "열린 PR 없음"을 보고
-          # 둘 다 create하는 것. GitHub이 중복 PR을 거부하므로 **실패를 갱신으로 받아넘긴다.**
+          # 둘 다 create하는 것. GitHub이 중복 PR을 거부하므로 **"이미 존재함" 에러에 한해
+          # 갱신으로 받아넘긴다.** 권한·레이트리밋 등 다른 이유의 실패는 그대로 실패시켜
+          # 누군가 수동으로 열어둔 무관한 dev→main PR을 덮어쓰지 않게 한다.
           if ! gh pr create --repo "$REPO" --base "$TARGET" --head "$BASE" \
                  --title "$title" --body-file "$RUNNER_TEMP/release-body.md" 2>"$RUNNER_TEMP/pr-err"; then
             cat "$RUNNER_TEMP/pr-err"
+            if ! grep -qi "already exists" "$RUNNER_TEMP/pr-err"; then
+              echo "::error::릴리스 PR 생성 실패 — '이미 존재함'이 아닌 에러라 경합으로 보지 않는다"
+              exit 1
+            fi
             raced=$(gh pr list --repo "$REPO" --base "$TARGET" --head "$BASE" --state open \
                       --json number --jq '(.[0].number // empty)')
             if [ -z "$raced" ]; then
