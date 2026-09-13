@@ -13,6 +13,9 @@ on:
 
 jobs:
   after-merge:
+    # fork PR에서는 돌지 않는다 — `self-review.yml`과 같은 이유(시크릿이 안 넘어와 App
+    # 토큰 발급부터 실패한다). 뒷정리할 게 있는 건 어차피 이 저장소 브랜치에서 온 PR뿐이다.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     # 호출부가 권한을 명시해야 한다 — 이 저장소는 기본 워크플로우 권한이 좁아서,
     # 불린 워크플로우가 요구하는 write 권한을 호출부가 안 주면 startup_failure로 죽는다.
     permissions:

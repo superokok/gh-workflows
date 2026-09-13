@@ -3,3 +3,6 @@ _src/
 # scripts/lint-workflows.sh 가 받아오는 바이너리
 actionlint
 actionlint.exe
+
+# 소비 저장소 목록 — 이 저장소는 public이라 목록을 코드와 같이 두지 않는다
+scripts/repos.local

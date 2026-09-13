@@ -1,0 +1,10 @@
+# 이 루프를 소비하는 저장소 목록. 이 파일을 scripts/repos.local 로 복사해서 쓴다.
+#
+# repos.local 은 gitignore된다 — 이 저장소는 public이고, 목록은 곧 "이 계정이 어떤
+# private 저장소를 갖고 있는가"라서 코드와 같은 곳에 두지 않는다.
+#
+# 한 줄에 owner/repo 하나. `#` 주석과 빈 줄은 무시한다.
+# 루프를 자기 자신에게도 돌리는 저장소(self-*)는 자기 이름도 넣는다.
+
+owner/gh-workflows
+owner/some-consumer-repo
