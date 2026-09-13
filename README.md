@@ -274,12 +274,23 @@ jobs:
 
 | 호출부 파일 | `uses:` | 트리거 |
 |---|---|---|
-| `after-merge.yml` | `after-merge.yml@main` | `pull_request: {types: [closed]}` |
+| `after-merge.yml` | `after-merge.yml@main` (릴리스 PR도 여기서 — 입력 `release-target`: 운영 브랜치(보통 `main`), `pre-merge-note`: 프로젝트별 안내 마크다운) | `pull_request: {types: [closed]}` |
 | `claude-review.yml` | `claude-review.yml@main` | `pull_request: {types: [opened, synchronize, ready_for_review, reopened]}` |
 | `claude-agent.yml` | `claude-agent.yml@main` | `issues: {types: [labeled]}` |
 | `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["CI", "Preview Smoke"], types: [completed]}` + `status:` |
 | `preview-smoke.yml` | `preview-smoke.yml@main` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
-| `release-pr.yml` | `release-pr.yml@main` (선택 입력 `pre-merge-note`: staging 링크·머지 방식 등 프로젝트별 안내 마크다운) | `push: {branches: [develop]}` + `workflow_dispatch:` |
+| `release-pr.yml` | `release-pr.yml@main` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
+
+> **릴리스 PR은 `after-merge.yml`이 같은 잡의 스텝으로 만든다.** 예전엔 `push: <통합 브랜치>`로
+> 도는 별도 워크플로우였는데, 그 push는 **거의 항상 `after-merge`를 깨우는 PR 머지와 같은
+> 사건**이다. 같은 사건에 잡이 둘이면 Actions 분이 잡 단위로 올림 과금돼 10초짜리 일이 2분으로
+> 청구된다(실측: 11시간 표본에서 Release PR 11 run이 실제 2분 작업에 11분 청구).
+>
+> 커버리지는 오히려 늘었다 — **릴리스 PR이 머지되면 통합 브랜치는 안 바뀌어서** 예전
+> `push:` 트리거는 그때 안 돌았는데, `after-merge`는 그 순간에도 깨어난다.
+>
+> 마이그레이션은 호출부 두 줄이다: `after-merge.yml`에 `release-target`·`pre-merge-note`를
+> 넘기고, `release-pr.yml`에서 `push:` 트리거를 뗀다.
 
 `claude.yml`(`@claude` 멘션 응답)은 `/install-github-app`이 프로젝트에 직접 만들어 주므로
 여기 없다. 배포(`deploy.yml`)·모바일 빌드도 프로젝트 고유라 각자 소유한다.

@@ -27,6 +27,27 @@ on:
         description: 뒷정리 대상 PR의 base. 통합 브랜치가 없으면 "main"
         type: string
         default: "develop"
+      release-target:
+        description: |
+          비어 있지 않으면 뒷정리와 **같은 잡에서** 릴리스 PR(`base-branch` → 이 값)을
+          생성/갱신한다. 통합 브랜치가 없는 저장소는 비워 둔다(릴리스 흐름 자체가 없다).
+
+          왜 여기로 옮겼나: `release-pr.yml`은 `push: <통합 브랜치>`로 도는 별도 워크플로우였는데,
+          **그 push는 거의 항상 이 워크플로우를 깨우는 PR 머지와 같은 사건**이다. 같은 사건에
+          잡이 둘이면 **Actions 분이 잡 단위로 올림 과금**되므로 10초짜리 일이 2분으로 청구된다
+          (실측: 11시간 표본에서 Release PR 11 run이 실제 2분 작업에 11분 청구). 이 파일이
+          이미 잡 4개를 스텝으로 합친 것과 같은 이유다.
+
+          커버리지는 오히려 늘어난다 — 릴리스 PR이 머지되면 `<통합 브랜치>`는 안 바뀌어서
+          예전 `push:` 트리거는 안 돌았지만, 이 워크플로우는 그때도 깨어난다.
+        type: string
+        default: ""
+      pre-merge-note:
+        description: |
+          릴리스 PR 본문의 "포함된 변경" 목록 앞에 그대로 넣을 마크다운(staging 링크, 머지 방식
+          안내 등). 프로젝트마다 다르므로 강제하지 않는다. `release-target`이 비어 있으면 무시된다.
+        type: string
+        default: ""
 
 jobs:
   # **네 가지 뒷정리를 한 잡에서 스텝으로 한다.** 예전엔 잡 4개였는데, GitHub Actions는
@@ -267,6 +288,76 @@ jobs:
             exit 1
           fi
 
+      # ── 릴리스 PR (통합 브랜치 → 운영 브랜치) ────────────────────────────────
+      # `release-pr.yml`에 있던 로직을 이 잡의 스텝으로 옮긴 것이다. 배경은 `release-target`
+      # input 설명 참고.
+      #
+      # **체크아웃을 하지 않는다.** 원본은 `git rev-list`/`git log`를 쓰려고 `fetch-depth: 0`으로
+      # 전체 히스토리를 받았는데, 이 잡은 원래 체크아웃이 없다. compare API가 같은 정보
+      # (ahead_by + 커밋 목록)를 주므로 clone 시간까지 같이 없어진다. 대신 커밋 목록은
+      # 250건이 상한인데, 릴리스 주기가 그보다 길어질 일은 없다.
+      #
+      # **App 토큰으로 만든다.** `GITHUB_TOKEN`으로 만든 PR에는 GitHub이 워크플로우를
+      # 트리거하지 않아 CI가 안 돌고, "릴리스는 초록 + 사람" 게이트가 빈 껍데기가 된다.
+      - name: 릴리스 PR 생성/갱신 (갱신은 알림 없음)
+        id: release-pr
+        if: ${{ !cancelled() && inputs.release-target != '' && github.event.pull_request.merged == true }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ inputs.base-branch }}
+          TARGET: ${{ inputs.release-target }}
+          PRE_MERGE_NOTE: ${{ inputs.pre-merge-note }}
+        run: |
+          set -euo pipefail
+
+          # 어떤 base로 머지됐든 돈다 — 판정은 compare가 한다. 릴리스 PR 자신이 머지된
+          # 직후에도 이 스텝이 깨어나지만 그때는 ahead=0이라 아무 일도 하지 않는다.
+          ahead=$(gh api "repos/$REPO/compare/$TARGET...$BASE" --jq '.ahead_by')
+          if [ "$ahead" -eq 0 ]; then
+            echo "$BASE가 $TARGET과 같음 — 릴리스할 것 없음"; exit 0
+          fi
+          echo "$BASE가 $TARGET보다 $ahead 커밋 앞섬"
+
+          # 본문은 파일로 만든다 — 커밋 제목에 백틱/따옴표가 섞여도 셸이 해석하지 않게.
+          {
+            printf '%s\n\n' "\`$BASE\` → \`$TARGET\` 운영 반영입니다. **머지하면 즉시 운영 배포 + DB 마이그레이션이 돕니다.**"
+            if [ -n "$PRE_MERGE_NOTE" ]; then printf '%s\n\n' "$PRE_MERGE_NOTE"; fi
+            printf '## 포함된 변경 (%s건)\n\n' "$ahead"
+            gh api "repos/$REPO/compare/$TARGET...$BASE" \
+              --jq '.commits[] | "- \(.commit.message | split("\n")[0])"'
+            printf '\n---\n\n%s\n' '이 PR은 `after-merge.yml`이 자동으로 열고 갱신합니다(갱신에는 알림이 가지 않습니다). 머지는 사람이 합니다.'
+          } > "$RUNNER_TEMP/release-body.md"
+
+          title="release: $BASE → $TARGET (${ahead}건)"
+
+          existing=$(gh pr list --repo "$REPO" --base "$TARGET" --head "$BASE" --state open \
+                       --json number --jq '(.[0].number // empty)')
+
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/release-body.md"
+            echo "기존 릴리스 PR #$existing 갱신"
+            exit 0
+          fi
+
+          # `release-pr.yml`에는 `concurrency: release-pr`가 있었지만 이 잡에는 없다
+          # (여기 concurrency를 걸면 뒷정리·큐 구동까지 같이 취소될 수 있어 넣지 않는다).
+          # 그래서 check-then-act 경합이 원리적으로 가능하다 — 둘 다 "열린 PR 없음"을 보고
+          # 둘 다 create하는 것. GitHub이 중복 PR을 거부하므로 **실패를 갱신으로 받아넘긴다.**
+          if ! gh pr create --repo "$REPO" --base "$TARGET" --head "$BASE" \
+                 --title "$title" --body-file "$RUNNER_TEMP/release-body.md" 2>"$RUNNER_TEMP/pr-err"; then
+            cat "$RUNNER_TEMP/pr-err"
+            raced=$(gh pr list --repo "$REPO" --base "$TARGET" --head "$BASE" --state open \
+                      --json number --jq '(.[0].number // empty)')
+            if [ -z "$raced" ]; then
+              echo "::error::릴리스 PR 생성 실패 — 열린 PR도 없다"; exit 1
+            fi
+            gh pr edit "$raced" --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/release-body.md"
+            echo "경합 감지 — 이미 열린 #$raced 을 갱신했다"
+          else
+            echo "릴리스 PR 생성"
+          fi
+
       # 스텝을 합치며 잡 단위 성공/실패 가시성을 잃었다(PR #24 리뷰 지적, #26) — 스텝
       # 하나만 실패해도 잡 전체가 빨간 X가 되어, 로그를 열기 전엔 어느 정리가 실패했는지
       # 알 수 없다. 여기서 스텝별 outcome을 모아 요약에 남긴다.
@@ -277,11 +368,12 @@ jobs:
           CLOSE_ISSUES: ${{ steps.close-issues.outcome }}
           DELETE_BRANCH: ${{ steps.delete-branch.outcome }}
           DRAIN_QUEUE: ${{ steps.drain-queue.outcome }}
+          RELEASE_PR: ${{ steps.release-pr.outcome }}
         run: |
           set -euo pipefail
 
           failed=""
-          for pair in "머지 알림:$NOTIFY" "이슈 닫기:$CLOSE_ISSUES" "브랜치 삭제:$DELETE_BRANCH" "큐 구동:$DRAIN_QUEUE"; do
+          for pair in "머지 알림:$NOTIFY" "이슈 닫기:$CLOSE_ISSUES" "브랜치 삭제:$DELETE_BRANCH" "큐 구동:$DRAIN_QUEUE" "릴리스 PR:$RELEASE_PR"; do
             name="${pair%%:*}"
             outcome="${pair#*:}"
             if [ "$outcome" = "failure" ]; then
