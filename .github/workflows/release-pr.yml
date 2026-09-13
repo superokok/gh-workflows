@@ -1,5 +1,14 @@
 name: Release PR (develop → main) (reusable)
 
+# ⚠️ **평소 경로는 여기가 아니다.** 같은 로직이 `after-merge.yml`의 스텝으로 들어갔다
+# (`release-target` input). 통합 브랜치로의 PR 머지는 어차피 그 워크플로우를 깨우므로
+# 같은 사건에 잡을 둘 쓸 이유가 없다 — Actions 분은 **잡 단위로 올림 과금**된다.
+# 호출부에서는 `push:` 트리거를 떼고 `workflow_dispatch:`만 남긴다.
+#
+# 지우지 않고 남겨두는 이유는 **수동 재생성 창구**다. after-merge의 릴리스 스텝이 실패했거나
+# (App 토큰 문제 등) 릴리스 PR을 실수로 닫았을 때, 머지 이벤트를 억지로 만들지 않고 여기서
+# 한 번 돌리면 복구된다. 안 돌리면 분도 안 든다.
+#
 # `develop`이 `main`보다 앞서면 운영 반영 PR을 **항상 열어두고** 최신으로 유지한다.
 #
 # 패턴: release-please / changesets와 같은 "항상 열린 릴리스 PR". PR은 잔소리가 아니라
