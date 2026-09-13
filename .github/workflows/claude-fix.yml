@@ -50,13 +50,18 @@ concurrency:
 
 jobs:
   fix:
+    # `github.actor != 'dependabot[bot]'`가 바깥에 한 번 더 걸린다 — Dependabot이 트리거한
+    # 실행에는 시크릿이 안 와서 App 토큰 발급부터 죽는다(`claude-review.yml`의 같은 조건
+    # 주석 참고). 고칠 수도 없으면서 빨간불만 남기는 실행을 아예 깨우지 않는다.
+    # 의존성 PR의 빨간불은 사람이 본다 — 버전을 내리든 닫든 판단이 필요한 종류다.
     if: >-
-      (github.event_name == 'workflow_run' &&
+      github.actor != 'dependabot[bot]' &&
+      ((github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'failure' &&
        github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.head_repository.full_name == github.repository) ||
       (github.event_name == 'status' && github.event.context == 'Vercel' &&
-       (github.event.state == 'failure' || github.event.state == 'error'))
+       (github.event.state == 'failure' || github.event.state == 'error')))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
