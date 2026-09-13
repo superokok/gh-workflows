@@ -407,6 +407,18 @@ jobs:
 - **이 저장소가 public이면 접근 허용 설정이 필요 없다** — public 재사용 워크플로우는 누구나
   `uses:`로 부를 수 있다. private으로 두면 계정당 1회 열어줘야 한다: 이 저장소
   Settings → Actions → General → Access → *Accessible from repositories owned by the user*.
+- **Dependabot PR도 시크릿을 못 받는다** — fork PR과 같은 이유이고, 결과는 훨씬 나쁘다.
+  GitHub은 Dependabot secrets를 별도 저장소에 두므로 `create-github-app-token`부터 실패한다.
+  `review / review`가 **필수 체크**면 그 PR은 BLOCKED로 굳고, `base=<통합 브랜치>` 열린 PR이
+  사라지지 않아 **WIP 제한 1이 영구히 걸려 `claude-agent`가 통째로 멈춘다.**
+  2026-09-13 devDepth에서 실제로 그랬다(Dependabot PR 4건이 동시에 막혀 `agent-queued`
+  이슈가 깨어날 수 없게 됐다). 그래서 `claude-review`·`enable-auto-merge`·`claude-fix`는
+  `github.actor != 'dependabot[bot]'`로 **깨어나지 않는다** — job 수준 `if:`라 check-run은
+  `skipped`로 생성되고 필수 체크는 그걸 success로 본다.
+  대안은 Dependabot secrets에 같은 값을 복제하는 것인데, **에이전트 App 토큰(write)을
+  Dependabot 컨텍스트까지 넓히는** 일이라 택하지 않았다. 의존성 PR은 거의 전부 공급망
+  위험 경로라 어차피 사람이 diff를 보고 머지한다 — 잃는 건 AI 리뷰 한 겹이고, 사람 게이트는
+  그대로다.
 - **public일 때 fork PR은 시크릿을 못 받는다**(GitHub 플랫폼 규칙). 그래서 `self-review`·
   `self-after-merge`는 `head.repo.full_name == github.repository`로 막아 뒀다 — 안 막으면
   외부 PR마다 App 토큰 발급부터 실패해 **리뷰는 한 줄도 못 하면서 빨간불과 분만** 나간다.

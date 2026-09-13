@@ -57,7 +57,26 @@ concurrency:
 jobs:
   review:
     # 통합 브랜치 대상 PR만 (릴리스 PR은 사람이 직접 보므로 제외)
-    if: github.event.pull_request.base.ref == inputs.base-branch
+    #
+    # **Dependabot PR은 제외한다 — 안 그러면 그 PR이 영원히 머지 불가가 된다.**
+    # Dependabot이 트리거한 실행에는 저장소 시크릿이 전달되지 않는다(GitHub이 Dependabot
+    # secrets를 별도 저장소에 둔다). 그래서 `create-github-app-token`부터 실패하고,
+    # `review / review`가 **필수 체크**인 저장소에서는 그 PR이 BLOCKED로 굳는다.
+    # 그러면 `base=<통합 브랜치>` 열린 PR이 사라지지 않아 **WIP 제한 1이 영구히 걸리고
+    # claude-agent가 통째로 멈춘다** — 2026-09-13 devDepth에서 실제로 그렇게 됐다
+    # (Dependabot PR 4건이 동시에 막히면서 `agent-queued` 이슈가 깨어날 수 없게 됐다).
+    #
+    # job 수준 `if:`로 거르면 check-run이 `skipped`로 **생성되고**, 필수 체크는 그걸
+    # success로 취급한다. 워크플로우 수준 필터와 다르다 — 그건 check-run 자체가 안 생겨
+    # 영구 Pending이 된다.
+    #
+    # 리뷰를 잃는 대가는 받아들일 만하다: 의존성 PR은 거의 전부 위험 경로(공급망)라
+    # 어차피 사람이 diff를 보고 머지한다. 대안은 Dependabot secrets에 같은 값을 복제하는
+    # 것인데, **에이전트 App 토큰(write)을 Dependabot 컨텍스트까지 넓히는** 일이라
+    # 이 저장소가 토큰 범위에 대해 내려온 다른 결정들과 어긋난다.
+    if: >-
+      github.event.pull_request.base.ref == inputs.base-branch &&
+      github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # 폭주 상한. `--max-turns`가 아니라 job 타임아웃으로 잡는다 — max-turns는 도중에
     # **성공으로** 끝나서, 2번(고위험 차단)에 닿기 전에 잘리면 위험한 PR이 그대로 머지된다.
