@@ -177,14 +177,18 @@ cat <<EOF
        gh secret set VERCEL_AUTOMATION_BYPASS_SECRET --repo $REPO   # preview-smoke
        gh secret set DOTENV_PRIVATE_KEY --repo $REPO                # dotenvx
 
-  4) 이 저장소(gh-workflows)의 접근 허용 — **계정당 1회면 됩니다**
+  4) 이 저장소(gh-workflows)의 접근 허용
+       gh-workflows가 **public이면 이 단계는 필요 없습니다** — public 재사용
+       워크플로우는 누구나 uses:로 부를 수 있습니다.
+       private이면 계정당 1회:
        Settings → Actions → General → Access
        → "Accessible from repositories owned by the user"
 
   5) Vercel: 프로젝트 연결, $INTEGRATION → staging 도메인,
        Deployment Protection → Protection Bypass for Automation (위 3번 시크릿)
 
-  6) 파일은 이 스크립트가 건드리지 않습니다. kitchen-tempo에서 가져오세요:
+  6) 파일은 이 스크립트가 건드리지 않습니다. 이 루프를 이미 쓰는 저장소에서
+     가져오세요:
        .github/workflows/  (호출부 — 트리거·권한·risk-paths는 프로젝트마다 다릅니다)
        .claude/settings.json, .claude/hooks/**, .claude/skills/steward
        ※ vitest.config의 include에 '.claude/hooks/*.test.ts'를 넣으세요.

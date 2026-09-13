@@ -11,8 +11,8 @@
 #
 # 사용:
 #   scripts/sync-secrets.sh --check              # 현황만 본다 (읽기 전용, 값 불필요)
-#   scripts/sync-secrets.sh                      # 물어보고 기본 목록 전체에 등록
-#   scripts/sync-secrets.sh superokok/new-repo   # 물어보고 그 저장소에만 등록
+#   scripts/sync-secrets.sh                      # 물어보고 목록 전체에 등록
+#   scripts/sync-secrets.sh <owner>/<repo>       # 물어보고 그 저장소에만 등록
 #
 # 값은 물어본다. 스크립트로 돌릴 땐 환경변수로 미리 주면 안 묻는다:
 #   AGENT_APP_CLIENT_ID       GitHub App의 Client ID (Iv23… 형태)
@@ -25,23 +25,70 @@
 # 마스터 사본을 Bitwarden 같은 곳에 두는 이유가 그거다.
 set -uo pipefail
 
-# 이 루프를 소비하는 저장소. gh-workflows 자신도 self-loop를 돌리므로 포함된다.
-# 저장소를 추가하면 여기에도 추가한다 — 안 그러면 `--check`가 그 저장소를 안 본다.
-DEFAULT_REPOS=(
-  superokok/gh-workflows
-  superokok/kitchen-tempo
-  superokok/devDepth
-)
-
 # 이 루프가 요구하는 secret. preview-smoke(VERCEL_…)·dotenvx(DOTENV_…)는 프로젝트마다
 # 쓰고 안 쓰고가 갈려서 여기 넣지 않는다 — 없다고 루프가 멈추지 않는다.
 REQUIRED=(AGENT_APP_CLIENT_ID AGENT_APP_PRIVATE_KEY CLAUDE_CODE_OAUTH_TOKEN)
+
+# ── 대상 저장소 목록 ────────────────────────────────────────────────────────
+# **이 파일에 목록을 적지 않는다.** 이 저장소는 public이고, 목록은 곧 "이 계정이 어떤
+# private 저장소를 갖고 있는가"다. 코드가 공개돼도 무해한 것과, 목록이 공개되면 곤란한
+# 것은 다른 종류라 저장 위치를 나눈다.
+#
+# 찾는 순서 — 먼저 찾은 하나만 쓴다:
+#   1. 인자로 준 저장소들
+#   2. $AGENT_REPOS               공백/쉼표로 구분 (CI·일회성 실행용)
+#   3. scripts/repos.local        저장소 안, gitignore됨 (평소 쓰는 곳)
+#   4. ~/.config/gh-workflows/repos
+# 둘 다 `owner/repo` 한 줄에 하나, `#` 주석과 빈 줄 허용.
+#
+# **못 찾으면 조용히 넘어가지 않고 실패한다.** 목록이 비면 `--check`는 아무것도 점검하지
+# 않고 초록으로 끝나는데, 그건 "다 괜찮다"와 구별되지 않는다 — 이 스크립트가 존재하는
+# 이유가 바로 그 침묵을 없애는 것이다.
+read_repo_file() {
+  [ -f "$1" ] || return 1
+  sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -E '^[^/]+/[^/]+$'
+}
+
+resolve_repos() {
+  local here list
+  here="$(cd "$(dirname "$0")" && pwd)"
+
+  if [ -n "${AGENT_REPOS:-}" ]; then
+    printf '%s\n' "${AGENT_REPOS//,/ }" | tr ' ' '\n' | grep -E '^[^/]+/[^/]+$'
+    return
+  fi
+  for f in "$here/repos.local" "${XDG_CONFIG_HOME:-$HOME/.config}/gh-workflows/repos"; do
+    if list=$(read_repo_file "$f") && [ -n "$list" ]; then
+      printf '%s\n' "$list"
+      return
+    fi
+  done
+  return 1
+}
 
 check_only=""
 [ "${1:-}" = "--check" ] && { check_only=1; shift; }
 
 repos=("$@")
-[ ${#repos[@]} -eq 0 ] && repos=("${DEFAULT_REPOS[@]}")
+if [ ${#repos[@]} -eq 0 ]; then
+  # `mapfile`을 쓰지 않는다 — bash 4부터라 macOS 기본 bash 3.2에서 조용히 빈 배열이 된다.
+  while IFS= read -r line; do
+    [ -n "$line" ] && repos+=("$line")
+  done < <(resolve_repos)
+
+  if [ ${#repos[@]} -eq 0 ]; then
+    cat >&2 <<'EOF'
+대상 저장소 목록이 없다. 셋 중 하나로 준다:
+
+  scripts/sync-secrets.sh owner/repo          # 인자로 직접
+  AGENT_REPOS="owner/a owner/b" scripts/…     # 환경변수로
+  scripts/repos.local 에 한 줄에 하나씩        # 평소 쓰는 곳 (gitignore됨)
+
+repos.local 예시는 scripts/repos.local.example 에 있다.
+EOF
+    exit 2
+  fi
+fi
 
 command -v gh >/dev/null 2>&1 || { echo "gh CLI가 필요하다" >&2; exit 1; }
 
