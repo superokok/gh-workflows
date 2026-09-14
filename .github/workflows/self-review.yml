@@ -11,17 +11,30 @@ name: Claude Review
 #
 # 2026-09-14(#60): `notify-handle`을 넘겨서 체크 결과(초록/빨간불)에 따라 담당자를
 # 지정하게 했다 — 안 그러면 이 저장소 PR의 빨간불은 아무도 모른다(claude-review.yml
-# 상단 "2026-09-14(#60)" 주석 참고, 실측: PR #59). `workflow_run: {workflows: ["Claude
-# Review", "Lint"]}`를 함께 걸어 `notify-ready` 폴백을 켠다 — `Lint`(이 저장소의 CI)가
-# 리뷰보다 늦게 끝나는 경우뿐 아니라, **`review` job 자신이 startup_failure로 죽어 그
-# job의 담당자 지정 스텝조차 못 도는 경우**까지 잡으려면 이 워크플로우 자신의 이름도
-# 목록에 있어야 한다.
+# 상단 "2026-09-14(#60)" 주석 참고, 실측: PR #59). `Lint`(이 저장소의 CI)가 리뷰보다
+# 늦게 끝나는 경우를 위해 `workflow_run: {workflows: ["Lint"]}`로 `notify-ready`
+# 폴백을 켠다.
+#
+# **이 목록에 이 워크플로우 자신의 이름("Claude Review")을 넣지 않는다.** 처음엔
+# "`review` job이 startup_failure로 죽으면 담당자 지정 스텝도 못 도니 자기 자신도
+# 감시해야 한다"고 넣었는데, **그 자기 참조가 파일을 무효로 만들어 GitHub 파서가
+# 거부했다** — run이 아예 생성되지 않아 필수 체크 `review / review`가 "Expected —
+# Waiting for status to be reported"로 영구 Pending이 되고 PR이 머지 불가로 굳었다
+# (2026-09-14 PR #63 실측. `scripts/lint-workflows.sh`의 actionlint는 통과시켰다 —
+# GitHub 자체 검증만 잡는 종류다).
+#
+# 애초에 논리도 성립하지 않았다: 파일이 무효면 run이 없으므로 자기를 감시할 수 없고,
+# `workflow_run`은 **default 브랜치에서만** 발동하므로 PR 브랜치의 startup_failure는
+# 어차피 잡지 못한다.
+#
+# 그 커버리지는 **다른 워크플로우**가 맡는다 — `self-fix.yml`이 `workflows:`에
+# "Claude Review"를 넣어 이 워크플로우의 실패를 감시한다(그쪽은 자기 참조가 아니라 유효하다).
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
   workflow_run:
-    workflows: ["Claude Review", "Lint"]
+    workflows: ["Lint"]
     types: [completed]
 
 jobs:

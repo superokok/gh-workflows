@@ -9,10 +9,15 @@ name: Self Fix (red build → 수정 커밋)
 #
 # 이 저장소의 CI는 `self-lint.yml`(워크플로우 이름 "Lint") 하나뿐이다 — Vercel도
 # Preview Smoke도 없으므로 `status:` 트리거는 걸지 않는다.
+#
+# `"Claude Review"`도 감시한다: 그 워크플로우가 실패하면(startup_failure 포함) 필수 체크
+# `review / review`가 영구 Pending이 되어 PR이 머지 불가로 굳는데, **자기 자신은 감시할 수
+# 없으므로**(자기 참조는 파일을 무효로 만든다 — `self-review.yml` 주석, PR #63 실측)
+# 여기서 대신 본다. 여긴 다른 워크플로우라 자기 참조가 아니고 유효하다.
 
 on:
   workflow_run:
-    workflows: ["Lint"]
+    workflows: ["Lint", "Claude Review"]
     types: [completed]
 
 jobs:
