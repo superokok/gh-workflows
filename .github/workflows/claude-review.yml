@@ -31,6 +31,29 @@ name: Claude Review (reusable)
 # job이라 추가 job 비용이 0이다. `mergeStateStatus`가 아직 `CLEAN`이 아니면 같은 스텝
 # 안에서 짧게 재확인한다(비동기 계산 — GitHub이 아직 판정 중일 수 있다).
 # CI가 리뷰보다 늦게 끝나는 PR을 위해 `notify-ready` job을 폴백으로 둔다(아래).
+#
+# 2026-09-14(#60): #55가 "CLEAN이면 담당자"만 만들고 "실패하면 담당자"를 없앴다 —
+# 체크가 실패한 PR은 영원히 CLEAN이 되지 않으므로 담당자도 알림도 영영 안 왔다
+# (실측: 이 저장소 PR #59에서 `review / review`가 startup_failure로 죽었는데도
+# 아무도 불려오지 않았다). 그래서 판정을 세 갈래로 나눈다:
+#   - CLEAN(초록 + 머지 가능)                              → 담당자 지정 (#55 그대로)
+#   - 필수 체크가 failure/cancelled/startup_failure/
+#     timed_out/action_required로 끝남                     → 담당자 지정 + 원인 코멘트
+#   - 아직 pending/in_progress                              → 아무것도 하지 않는다 (#55 그대로)
+# `mergeStateStatus`만으로는 "미완"과 "실패"를 구분할 수 없다(둘 다 `BLOCKED`) — 그래서
+# `commits/{sha}/check-runs`의 결론을 **PR에 보고된 체크 목록**(`statusCheckRollup`)과
+# 교차해서 판정한다.
+#
+# 브랜치 보호(`branches/{branch}/protection/required_status_checks`)를 쓰지 않는다:
+# 그 조회는 GitHub App **Administration(read)** 권한을 요구하는데 에이전트 App엔 없어서
+# 404가 돌아온다. 2026-09-14 PR #63에서 이 호출이 스텝의 첫 실패였고, `bash -e` 때문에
+# 스텝이 출력 없이 죽어 `review / review`가 빨간불이 되며 **멀쩡한 PR이 머지 불가로
+# 굳었다.** `statusCheckRollup`은 추가 권한이 필요 없다 — 대신 "필수"와 "자문용"을
+# 구분하지 않으므로, 비필수 체크를 추가하게 되면 이 가정을 다시 검토한다. `claude-fix.yml`이 붙어 있는
+# 저장소라면 자동 수정이 먼저 시도되게 양보한다 — `<!-- claude-fix:attempt -->` 마커가
+# 있고 아직 `<!-- claude-fix:gave-up -->`이 없으면(= 아직 재시도 중) 판정을 건너뛴다.
+# 중복 알림 방지는 SHA별 마커(`<!-- gate:checks-red:$SHA -->`)로 한다 — 같은 커밋에는
+# 한 번만, 새 커밋이 오면 다시 판정한다.
 
 on:
   workflow_call:
@@ -59,14 +82,16 @@ on:
       notify-handle:
         description: |
           `do-not-merge`가 붙어 사람 머지가 필요한 PR이 초록(mergeStateStatus == CLEAN)이
-          되면 담당자로 지정할 GitHub 핸들(예: "octocat"). 빈 문자열(기본값)이면 지정하지
-          않는다 — 기존 호출부는 무변화. (이슈 #46·#55)
+          되거나, 필수 체크가 실패로 끝나서 자동으로는 영영 초록이 되지 않을 때 담당자로
+          지정할 GitHub 핸들(예: "octocat"). 빈 문자열(기본값)이면 지정하지 않는다 —
+          기존 호출부는 무변화. (이슈 #46·#55·#60)
 
           담당자 지정(assignee)이 주 수단이다: watch 설정으로 끌 수 없는 유일한 알림
           경로라서다. 리뷰어 지정도 함께 요청한다 — 실패해도 무시한다.
 
           `enable-auto-merge.yml`에도 같은 이름의 입력이 있지만 거기서는 더 이상 담당자를
-          "붙이지" 않는다(#55) — 여기서 초록일 때만 붙인다. 두 호출부에 같은 값을 넘긴다.
+          "붙이지" 않는다(#55) — 여기서 초록이거나 빨간불일 때 붙인다. 두 호출부에 같은
+          값을 넘긴다.
         type: string
         default: ""
 
@@ -281,66 +306,143 @@ jobs:
           claude_args: >-
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh issue reopen:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh label create:*)"
 
-      # ── 초록이면 담당자 지정 (#55) ──────────────────────────────────────────
-      # `do-not-merge`가 붙어 있는 PR(위 리뷰가 방금 붙였든, `enable-auto-merge.yml`의
-      # 위험 경로 게이트가 붙였든)만 대상이다 — 그게 "사람이 머지한다"는 상태 표시라서다.
-      # 붙어 있지 않으면 auto-merge가 알아서 머지하므로 담당자를 알릴 이유가 없다.
+      # ── 체크 결과에 따라 담당자 지정 (#55·#60) ──────────────────────────────
+      # 세 갈래 판정(CLEAN / 필수 체크 실패 / 아직 진행 중)은 파일 상단 "2026-09-14(#60)"
+      # 주석 참고. CLEAN 갈래는 `do-not-merge`가 붙어 있는 PR만 대상이다 — 그게
+      # "사람이 머지한다"는 상태 표시라서다. 빨간불 갈래는 `do-not-merge` 여부와
+      # 무관하게 대상이다 — 체크가 실패하면 애초에 auto-merge가 되지 않으므로 항상
+      # 사람이 판단해야 한다(없으면 이 스텝이 직접 `do-not-merge`를 붙인다).
       #
       # 이 스텝은 **절대로 job을 실패시키면 안 된다** — `review`는 필수 체크라, 여기서
-      # 실패하면 순수 알림 기능 하나 때문에 멀쩡한 PR의 머지가 막힌다. 그래서 `set -e`를
-      # 쓰지 않고 모든 실패를 무해하게 흘려보낸다(fail-open).
-      - name: 초록이면 담당자 지정
+      # 실패하면 순수 알림 기능 하나 때문에 멀쩡한 PR의 머지가 막힌다.
+      #
+      # **`set -e`를 "쓰지 않는" 것으로는 부족하다.** GitHub은 `run:`의 기본 셸을
+      # `bash -e {0}`로 호출하므로 errexit이 **이미 켜진 채로** 시작한다 — `set +e`로
+      # 명시적으로 꺼야 한다. 2026-09-14 PR #63에서 이걸 놓쳐, 첫 파이프라인이 실패하자
+      # 출력 한 줄 없이 exit 1이 나고 `review / review`가 빨간불이 되어 **멀쩡한 PR이
+      # 머지 불가로 굳었다** — 알림 기능이 게이트를 망가뜨렸다.
+      # `-u`도 걸지 않는다: unbound 변수는 errexit과 무관하게 셸을 죽여 fail-open과 어긋난다.
+      - name: 체크 결과에 따라 담당자 지정
         if: inputs.notify-handle != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
           NOTIFY_HANDLE: ${{ inputs.notify-handle }}
         run: |
-          set -uo pipefail
+          set +e
+          set -o pipefail
 
-          labels=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '.labels[].name' 2>/dev/null)
-          if ! printf '%s\n' "$labels" | grep -qxF 'do-not-merge'; then
-            echo "do-not-merge 아님 — auto-merge 대상이라 담당자 알림이 필요 없다"; exit 0
-          fi
+          # 판정 대상 체크 목록. **브랜치 보호 API를 쓰지 않는다** —
+          # `repos/{r}/branches/{b}/protection/...`는 admin 권한을 요구하는데 에이전트 App
+          # 토큰엔 그게 없어 404가 돌아온다(2026-09-14 PR #63에서 이 호출이 첫 실패였다).
+          # 대신 PR에 **보고된 체크 전체**를 본다 — 권한이 필요 없고, 이 저장소들에는
+          # 자문용 체크가 없어서 "실패한 체크가 있으면 사람이 봐야 한다"가 그대로 성립한다.
+          # 비필수 체크를 추가하게 되면 이 가정을 다시 검토한다.
+          required=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup \
+                       --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
+                       | sort -u)
 
-          assignees=$(gh pr view "$PR" --repo "$REPO" --json assignees --jq '.assignees[].login' 2>/dev/null)
-          if printf '%s\n' "$assignees" | grep -qxF "$NOTIFY_HANDLE"; then
-            echo "이미 담당자 — 중복 알림 방지, 스킵"; exit 0
+          # 이름별 최신 check-run 결론 중 필수 체크가 실패류로 끝난 게 있는지 본다.
+          # 재시도로 같은 이름의 check-run이 여러 개 있을 수 있어 started_at 기준 최신만 본다.
+          detect_red() {
+            [ -z "$required" ] && return 1
+            runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate 2>/dev/null \
+                     | jq -s '[.[].check_runs[]]' 2>/dev/null \
+                     | jq -r 'sort_by(.started_at) | reverse | group_by(.name) | .[] | .[0] |
+                              "\(.name)\t\(.conclusion // "")"' 2>/dev/null)
+            [ -z "$runs" ] && return 1
+
+            detail=""
+            while IFS=$'\t' read -r name conclusion; do
+              [ -z "$name" ] && continue
+              printf '%s\n' "$required" | grep -qxF "$name" || continue
+              case "$conclusion" in
+                failure|cancelled|startup_failure|timed_out|action_required)
+                  detail="${detail}- \`$name\`: $conclusion"$'\n' ;;
+              esac
+            done <<< "$runs"
+
+            [ -z "$detail" ] && return 1
+            RED_DETAIL="$detail"
+          }
+
+          # claude-fix.yml이 아직 재시도 중이면 양보한다 — 자동 복구가 사람 호출보다 먼저다.
+          comments=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null)
+          fix_busy=false
+          if printf '%s\n' "$comments" | grep -qF '<!-- claude-fix:attempt -->' \
+             && ! printf '%s\n' "$comments" | grep -qF '<!-- claude-fix:gave-up -->'; then
+            fix_busy=true
           fi
 
           # mergeStateStatus는 비동기라 방금 끝난 체크가 아직 반영 안 됐을 수 있다(UNKNOWN).
           # 15초 간격으로 최대 90초 재확인한다 — 이 job은 리뷰로 이미 과금됐으므로 여기서
           # 기다리는 건 추가 비용이 없다.
           for i in 1 2 3 4 5 6; do
-            info=$(gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus 2>/dev/null)
+            info=$(gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus,labels,assignees 2>/dev/null)
             mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
             status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
+            has_dnm=$(printf '%s' "$info" | jq -r '[.labels[].name] | any(. == "do-not-merge")' 2>/dev/null)
+            already_assigned=$(printf '%s' "$info" | jq -r --arg h "$NOTIFY_HANDLE" '[.assignees[].login] | any(. == $h)' 2>/dev/null)
 
             if [ "$mergeable" = "MERGEABLE" ] && [ "$status" = "CLEAN" ]; then
+              if [ "$has_dnm" != "true" ]; then
+                echo "do-not-merge 아님 — auto-merge 대상이라 담당자 알림이 필요 없다"; exit 0
+              fi
+              if [ "$already_assigned" = "true" ]; then
+                echo "이미 담당자 — 중복 알림 방지, 스킵"; exit 0
+              fi
               gh pr edit "$PR" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>/dev/null || true
               gh pr edit "$PR" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" 2>/dev/null || true
               echo "담당자 지정함 (mergeable=$mergeable, status=$status)"
               exit 0
             fi
 
-            echo "아직 CLEAN 아님 (mergeable=$mergeable, status=$status, 시도 $i/6)"
+            if [ "$fix_busy" = "false" ]; then
+              RED_DETAIL=""
+              if detect_red; then
+                marker="<!-- gate:checks-red:$SHA -->"
+                if printf '%s\n' "$comments" | grep -qF "$marker"; then
+                  echo "이 커밋($SHA)은 이미 빨간불 알림을 보냈다 — 스킵"; exit 0
+                fi
+
+                gh pr edit "$PR" --repo "$REPO" --add-label do-not-merge 2>/dev/null || true
+                gh pr edit "$PR" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>/dev/null || true
+                gh pr edit "$PR" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" 2>/dev/null || true
+                {
+                  printf '@%s\n\n' "$NOTIFY_HANDLE"
+                  printf '%s\n\n' '🔴 **필수 체크 실패** `[AGENT-ACTION-REQUIRED]` — 자동으로는 초록이 되지 않습니다. 고칠지 닫을지 판단해주세요.'
+                  printf '%s\n' "$RED_DETAIL"
+                  printf '%s\n' "$marker"
+                } | gh pr comment "$PR" --repo "$REPO" --body-file -
+                echo "빨간불 담당자 지정함 (sha=$SHA)"
+                exit 0
+              fi
+            fi
+
+            echo "아직 판정 불가 (mergeable=$mergeable, status=$status, 시도 $i/6)"
             [ "$i" -lt 6 ] && sleep 15
           done
 
-          echo "90초 내 CLEAN이 안 됨 — notify-ready(폴백)가 CI 완료 시 다시 판정한다"
+          echo "90초 내 CLEAN도 빨간불도 확정되지 않음 — notify-ready(폴백)가 다시 판정한다"
           exit 0
 
-  # ── 폴백: CI가 리뷰보다 늦게 끝나는 PR을 위한 가벼운 판정 job (#55) ────────────
-  # 위 `review` job의 마지막 스텝은 리뷰가 끝나는 시점에 한 번만 CLEAN을 확인한다.
+  # ── 폴백: CI가 리뷰보다 늦게 끝나거나 review 자신이 죽은 PR을 위한 판정 job (#55·#60) ──
+  # 위 `review` job의 마지막 스텝은 리뷰가 끝나는 시점에 한 번만 판정한다.
   # CI(또는 다른 필수 체크)가 리뷰보다 늦게 끝나면 그 스텝은 CLEAN을 못 보고 지나가고,
-  # 폴백이 없으면 그 PR은 **담당자가 영영 붙지 않는다.** 이 job은 `workflow_run`으로
-  # 깨어나 같은 판정을 한 번 더 한다 — 흔한 경우엔(위 job이 이미 붙였음) `assignees`
-  # 검사에서 즉시 종료하므로 멱등하고 비용도 거의 0이다.
+  # **`review` job 자신이 startup_failure 등으로 죽으면 그 스텝 자체가 실행되지 않는다**
+  # (job이 시작도 못 했으니 스텝이 돌 수가 없다 — 2026-09-14 PR #59가 정확히 이 경우였다).
+  # 폴백이 없으면 두 경우 다 담당자가 영영 붙지 않는다. 이 job은 `workflow_run`으로
+  # 깨어나 같은 세 갈래 판정(CLEAN / 필수 체크 실패 / 진행 중)을 한 번 더 한다 — 흔한
+  # 경우엔(위 job이 이미 처리했음) 초반 체크에서 바로 종료하므로 멱등하고 비용도 거의 0이다.
   #
-  # 호출부가 이 폴백을 쓰려면 `on:`에 `workflow_run: {workflows: ["CI"], types:
-  # [completed]}`를 추가해야 한다(README "호출부" 참고). 그 파일은 **default 브랜치에
-  # 있는 버전이 돈다** — 새로 추가한 직후에는 release 전까지 효력이 없다.
+  # 호출부가 이 폴백을 쓰려면 `on:`에 `workflow_run: {workflows: [...], types:
+  # [completed]}`를 추가해야 한다(README "호출부" 참고). **`review` job 자신의 죽음까지
+  # 잡으려면 그 목록에 이 워크플로우 자신의 `name`(예: "Claude Review")도 넣어야 한다** —
+  # 안 넣으면 CI 실패는 잡아도 리뷰 자신의 startup_failure는 아무도 감지하지 못한다.
+  # 그 파일은 **default 브랜치에 있는 버전이 돈다** — 새로 추가한 직후에는 release 전까지
+  # 효력이 없다.
   notify-ready:
     if: >-
       inputs.notify-handle != '' &&
@@ -360,7 +462,7 @@ jobs:
           client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
 
-      - name: 대상 PR 찾아 초록이면 담당자 지정
+      - name: 대상 PR 찾아 체크 결과에 따라 담당자 지정
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -368,31 +470,75 @@ jobs:
           BASE: ${{ inputs.base-branch }}
           NOTIFY_HANDLE: ${{ inputs.notify-handle }}
         run: |
-          set -uo pipefail
+          set +e
+          set -o pipefail
 
           num=$(gh api "repos/$REPO/commits/$SHA/pulls" --paginate 2>/dev/null \
                   | jq -r --arg base "$BASE" \
                       '[.[] | select(.base.ref == $base and .state == "open")] | (.[0].number // empty)')
           if [ -z "$num" ]; then echo "$BASE 대상 열린 PR 없음 — 스킵"; exit 0; fi
 
-          labels=$(gh pr view "$num" --repo "$REPO" --json labels --jq '.labels[].name' 2>/dev/null)
-          if ! printf '%s\n' "$labels" | grep -qxF 'do-not-merge'; then
-            echo "do-not-merge 아님 — 스킵"; exit 0
-          fi
-
-          assignees=$(gh pr view "$num" --repo "$REPO" --json assignees --jq '.assignees[].login' 2>/dev/null)
-          if printf '%s\n' "$assignees" | grep -qxF "$NOTIFY_HANDLE"; then
-            echo "이미 담당자 — 스킵(멱등, 주 경로가 이미 처리한 흔한 경우)"; exit 0
-          fi
-
-          info=$(gh pr view "$num" --repo "$REPO" --json mergeable,mergeStateStatus 2>/dev/null)
+          info=$(gh pr view "$num" --repo "$REPO" --json mergeable,mergeStateStatus,labels,assignees 2>/dev/null)
           mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
           status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
+          has_dnm=$(printf '%s' "$info" | jq -r '[.labels[].name] | any(. == "do-not-merge")' 2>/dev/null)
+          already_assigned=$(printf '%s' "$info" | jq -r --arg h "$NOTIFY_HANDLE" '[.assignees[].login] | any(. == $h)' 2>/dev/null)
 
           if [ "$mergeable" = "MERGEABLE" ] && [ "$status" = "CLEAN" ]; then
+            if [ "$has_dnm" != "true" ]; then echo "do-not-merge 아님 — 스킵"; exit 0; fi
+            if [ "$already_assigned" = "true" ]; then
+              echo "이미 담당자 — 스킵(멱등, 주 경로가 이미 처리한 흔한 경우)"; exit 0
+            fi
             gh pr edit "$num" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>/dev/null || true
             gh pr edit "$num" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" 2>/dev/null || true
             echo "담당자 지정함 (폴백 경로, mergeable=$mergeable, status=$status)"
-          else
-            echo "아직 CLEAN 아님 (mergeable=$mergeable, status=$status) — 스킵"
+            exit 0
           fi
+
+          # 판정 대상 체크 목록. 브랜치 보호 API를 쓰지 않는 이유는 `review` job의 같은
+          # 부분 주석 참고(admin 권한 필요 → App 토큰으로 404, PR #63).
+          required=$(gh pr view "$num" --repo "$REPO" --json statusCheckRollup \
+                       --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
+                       | sort -u)
+          if [ -z "$required" ]; then echo "체크 목록이 비어 있음 — 빨간불 판정 보류"; exit 0; fi
+
+          # claude-fix.yml이 아직 재시도 중이면 양보한다 — 자동 복구가 사람 호출보다 먼저다.
+          comments=$(gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null)
+          if printf '%s\n' "$comments" | grep -qF '<!-- claude-fix:attempt -->' \
+             && ! printf '%s\n' "$comments" | grep -qF '<!-- claude-fix:gave-up -->'; then
+            echo "claude-fix가 아직 재시도 중 — 양보"; exit 0
+          fi
+
+          # 이름별 최신 check-run 결론 중 필수 체크가 실패류로 끝난 게 있는지 본다.
+          runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate 2>/dev/null \
+                   | jq -s '[.[].check_runs[]]' 2>/dev/null \
+                   | jq -r 'sort_by(.started_at) | reverse | group_by(.name) | .[] | .[0] |
+                            "\(.name)\t\(.conclusion // "")"' 2>/dev/null)
+
+          detail=""
+          while IFS=$'\t' read -r name conclusion; do
+            [ -z "$name" ] && continue
+            printf '%s\n' "$required" | grep -qxF "$name" || continue
+            case "$conclusion" in
+              failure|cancelled|startup_failure|timed_out|action_required)
+                detail="${detail}- \`$name\`: $conclusion"$'\n' ;;
+            esac
+          done <<< "$runs"
+
+          if [ -z "$detail" ]; then echo "아직 CLEAN도 빨간불도 아님 — 스킵"; exit 0; fi
+
+          marker="<!-- gate:checks-red:$SHA -->"
+          if printf '%s\n' "$comments" | grep -qF "$marker"; then
+            echo "이 커밋($SHA)은 이미 빨간불 알림을 보냈다 — 스킵"; exit 0
+          fi
+
+          gh pr edit "$num" --repo "$REPO" --add-label do-not-merge 2>/dev/null || true
+          gh pr edit "$num" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>/dev/null || true
+          gh pr edit "$num" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" 2>/dev/null || true
+          {
+            printf '@%s\n\n' "$NOTIFY_HANDLE"
+            printf '%s\n\n' '🔴 **필수 체크 실패** `[AGENT-ACTION-REQUIRED]` — 자동으로는 초록이 되지 않습니다. 고칠지 닫을지 판단해주세요.'
+            printf '%s\n' "$detail"
+            printf '%s\n' "$marker"
+          } | gh pr comment "$num" --repo "$REPO" --body-file -
+          echo "빨간불 담당자 지정함 (폴백 경로, sha=$SHA)"
