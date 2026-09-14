@@ -328,6 +328,13 @@ jobs:
   요구)나 merge queue를
   불필요하게 만든다 — merge queue는 private 저장소에서 Enterprise Cloud + 조직 소유가
   필요해 어차피 못 쓴다.
+  - **큐를 깨우는 트리거는 PR close 하나만이 아니다(#49).** `drain-queue`는 `pull_request:
+    closed`에만 걸려 있어서, **판이 이미 비어 있는 상태**에서 이슈가 `agent-queued`로
+    생기면(닫힐 PR이 없으니) 아무도 깨우지 않았다. 그래서 `claude-agent.yml`에
+    `wake-if-idle` job을 추가했다 — `agent-queued` 라벨이 붙는 이벤트에서도 같은 판정을
+    한 번 돌려서, 판이 비어 있으면 가장 오래 기다린 이슈를 그 자리에서 바로 승격한다.
+    라벨 스왑이 자기 자신을 다시 깨우지는 않는다(`agent`로 승격하는 이벤트의
+    `label.name`은 `agent`지 `agent-queued`가 아니라서 이 job의 조건에 다시 안 걸린다).
 
 - **불린 워크플로우의 job 단위 `permissions`는 호출부가 준 권한을 덮는다 — 낮추기만 가능하다.**
   `merged-notice` job이 `pull-requests: write`만 선언해서 `contents`가 none이 됐고, compare API가

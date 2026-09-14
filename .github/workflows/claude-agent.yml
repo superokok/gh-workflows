@@ -82,6 +82,92 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 판이 비었을 때 큐가 스스로 시작하게 한다(#49). 예전엔 `after-merge.yml`의
+  # drain-queue(PR close)만 착수 판정을 했는데, PR이 하나도 없는 상태에서 이슈가
+  # `agent-queued`로 만들어지면 그 close 이벤트 자체가 영영 안 와서 아무도 안 깨웠다.
+  # 그래서 `agent-queued`가 붙는 이벤트에서도 같은 판정을 한 번 돌린다.
+  #
+  # **라벨 스왑 루프가 아니다.** 이 job은 `github.event.label.name == 'agent-queued'`일
+  # 때만 돈다. 승격 과정에서 `agent-queued`를 떼고 `agent`를 붙이면 새 `labeled` 이벤트가
+  # 나가지만, 그 이벤트의 `label.name`은 `agent`이지 `agent-queued`가 아니므로 이 job의
+  # `if`에 다시 걸리지 않는다 — 승격은 이슈당 한 번뿐이고, 실제 착수(아래 `agent` job)는
+  # 그 새 이벤트로 정확히 한 번만 돈다.
+  #
+  # drain-queue와 같은 이유로 **오래 기다린 순서(FIFO)를 지킨다** — 방금 라벨이 붙은
+  # 이슈가 아니라 `agent-queued` 중 가장 오래된 이슈를 승격한다. 그래야 "판이 비었는데
+  # 더 먼저 대기하던 이슈가 있다"는 상황에서도 새치기가 나지 않는다.
+  #
+  # 대기 슬롯 1개 문제(concurrency 그룹의 대기 칸이 하나뿐이라 세 번째 실행이 두 번째
+  # 대기를 취소하는 것, 파일 상단 주석 참고)는 여기서 고치지 않는다. 이 job도 같은
+  # `claude-agent-${{ github.repository }}` 그룹에 걸려 있어 취소될 수 있지만, 그건
+  # "이미 누군가 판을 채우는 중"일 때만 일어난다 — 즉 판이 계속 비어 있는 원래 증상은
+  # 최소 하나는 반드시 착수되므로 사라진다. 취소된 나머지는 그 PR이 나중에 닫힐 때
+  # `after-merge.yml`의 drain-queue가 마저 깨운다(기존 경로 그대로).
+  wake-if-idle:
+    if: github.event.label.name == 'agent-queued'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      # PAT가 아니라 App 설치 토큰을 쓴다 — GITHUB_TOKEN으로 붙인 라벨은 `issues: labeled`
+      # 이벤트를 내지 않아(GitHub 플랫폼 제약) 승격 뒤 `agent` job이 깨어나지 않는다.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - name: 판이 비었으면 가장 오래 기다린 이슈를 즉시 승격
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ inputs.base-branch }}
+        run: |
+          set -euo pipefail
+
+          # remove-label → add-label 사이는 원자적이지 않다 — after-merge.yml의
+          # drain-queue와 같은 이유로 add-label은 재시도하고, 그래도 실패하면 되돌린다.
+          add_label_with_retry() {
+            local issue="$1" label="$2" attempts=5 delay=3 n=1
+            until gh issue edit "$issue" --repo "$REPO" --add-label "$label"; do
+              if [ "$n" -ge "$attempts" ]; then return 1; fi
+              echo "라벨 부착 실패 (#$issue → $label), ${delay}초 후 재시도 ($n/$attempts)"
+              sleep "$delay"
+              n=$((n + 1))
+              delay=$((delay * 2))
+            done
+          }
+
+          # drain-queue(after-merge.yml)와 같은 기준: 릴리스 PR(base=main)과 Dependabot
+          # PR은 세지 않는다 — Dependabot PR은 사람이 처리할 때까지 계속 열려 있어서 그대로
+          # 세면 큐가 영원히 안 풀린다(#47). 파일 겹침 판단은 여기서 하지 않는다 — 승격된
+          # 이슈를 실제로 맡을 `agent` job의 스텝 0이 다시 판단해 필요하면 큐로 되돌린다.
+          open=$(gh pr list --repo "$REPO" --base "$BASE" --state open --json number,author \
+                   --jq '[.[] | select(.author.login != "dependabot[bot]")] | length')
+          if [ "$open" != "0" ]; then
+            echo "열린 $BASE PR $open건(Dependabot 제외) — 대기 유지, 승격하지 않는다"; exit 0
+          fi
+
+          next=$(gh issue list --repo "$REPO" --state open --label agent-queued \
+                   --json number,createdAt --jq 'sort_by(.createdAt) | (.[0].number // empty)')
+          if [ -z "$next" ]; then
+            echo "agent-queued 이슈 없음 — 할 일 없음(라벨이 이미 바뀌었을 수 있다)"; exit 0
+          fi
+
+          echo "판이 비어 있음 — 가장 오래 기다린 #$next 를 즉시 승격한다"
+          gh issue edit "$next" --repo "$REPO" --remove-label agent-queued
+          gh issue comment "$next" --repo "$REPO" \
+            --body "판이 비어 있어 대기 없이 바로 착수합니다." || echo "댓글 실패 — 계속 진행"
+          # 라벨 부착이 claude-agent.yml의 agent job을 깨운다. 마지막에 붙인다.
+          if ! add_label_with_retry "$next" agent; then
+            echo "::error::#$next 에 agent 라벨을 붙이지 못했다 — agent-queued로 되돌린다"
+            gh issue edit "$next" --repo "$REPO" --add-label agent-queued || true
+            gh issue comment "$next" --repo "$REPO" \
+              --body "⚠️ 즉시 착수 중 agent 라벨 부착에 실패해 agent-queued로 되돌렸습니다. 다음 판이 빌 때 다시 시도됩니다." || true
+            exit 1
+          fi
+
   agent:
     if: github.event.label.name == 'agent'
     runs-on: ubuntu-latest
