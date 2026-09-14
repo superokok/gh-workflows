@@ -36,6 +36,16 @@ on:
           do-not-merge 라벨과 코멘트를 남겨 사람 머지로 넘긴다. 프로젝트마다 다르므로 필수.
         type: string
         required: true
+      notify-handle:
+        description: |
+          위험 경로 게이트가 사람 머지로 넘길 때 담당자로 지정할 GitHub 핸들(예: "octocat").
+          빈 문자열(기본값)이면 지정하지 않는다 — 기존 호출부는 무변화.
+
+          담당자 지정(assignee)이 주 수단이다: watch 설정으로 끌 수 없는 유일한 알림 경로라서다
+          (이슈 #46 참고 — 코멘트·리뷰 알림은 사용자가 끌 수 있어 실제로 안 닿은 사례가 있었다).
+          리뷰어 지정도 함께 요청한다 — 실패해도 무시한다(이미 리뷰어인 경우 등).
+        type: string
+        default: ""
 
 jobs:
   decide:
@@ -98,6 +108,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           RISK_RE: ${{ inputs.risk-paths }}
           METHOD: ${{ inputs.merge-method }}
+          NOTIFY_HANDLE: ${{ inputs.notify-handle }}
         run: |
           set -euo pipefail
 
@@ -116,10 +127,21 @@ jobs:
 
             gh pr edit "$PR" --repo "$REPO" --add-label do-not-merge || true
 
+            # 담당자 지정이 주 수단이다 — watch 설정으로 끌 수 없는 유일한 알림 경로.
+            # 리뷰어 지정은 보강("Review requested" 목록 + review_requested 알림 reason).
+            # 둘 다 synchronize마다 재실행되지만 이미 지정돼 있으면 그냥 실패하니 || true로 흘린다.
+            if [ -n "$NOTIFY_HANDLE" ]; then
+              gh pr edit "$PR" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" || true
+              gh pr edit "$PR" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" || true
+            fi
+
             # 같은 마커가 이미 있으면 다시 달지 않는다(push마다 재실행되므로).
             if ! gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' \
                  | grep -qF '<!-- gate:risk-path -->'; then
               {
+                if [ -n "$NOTIFY_HANDLE" ]; then
+                  printf '@%s\n\n' "$NOTIFY_HANDLE"
+                fi
                 printf '%s\n\n' '🔴 **머지 필요** `[AGENT-ACTION-REQUIRED]`'
                 printf '%s\n\n' '위험 경로 파일이 바뀌어 자동 머지를 켜지 않았습니다. 체크가 전부 초록이어도 머지되지 않습니다 — diff를 보고 직접 Merge해주세요.'
                 printf '```\n%s\n```\n\n' "$risky"
