@@ -425,6 +425,15 @@ jobs:
   Dependabot 컨텍스트까지 넓히는** 일이라 택하지 않았다. 의존성 PR은 거의 전부 공급망
   위험 경로라 어차피 사람이 diff를 보고 머지한다 — 잃는 건 AI 리뷰 한 겹이고, 사람 게이트는
   그대로다.
+  이 조치는 "Dependabot PR이 영구히 머지 불가로 굳는 것"만 막았고, "Dependabot PR이
+  **열려 있는 동안 WIP 큐가 멈추는 것**"은 남아 있었다(#47) — `claude-agent.yml` 스텝 0과
+  `after-merge.yml`의 `drain-queue`는 여전히 열린 PR을 author 구분 없이 셌다. 지금은 두
+  곳 다 Dependabot PR을 WIP 카운트에서 뺀다. 다만 완전히 무시하지는 않는다: `claude-agent`
+  스텝 0은 그 PR들이 건드린 파일에 `package-lock.json` 같은 의존성 manifest/락파일이 있고
+  이번 이슈도 같은 파일을 건드릴 것 같으면 그때는 그대로 대기한다(2026-09-09 PR #190·#191
+  충돌과 같은 부류를 다시 열지 않기 위함). `drain-queue`는 그 판단을 하지 않고 일단 깨우기만
+  한다 — 무엇을 건드릴지는 깨어난 `claude-agent`만 알므로, 겹치면 그 자리에서 다시 큐로
+  돌려보낸다.
 - **public일 때 fork PR은 시크릿을 못 받는다**(GitHub 플랫폼 규칙). 그래서 `self-review`·
   `self-after-merge`는 `head.repo.full_name == github.repository`로 막아 뒀다 — 안 막으면
   외부 PR마다 App 토큰 발급부터 실패해 **리뷰는 한 줄도 못 하면서 빨간불과 분만** 나간다.
