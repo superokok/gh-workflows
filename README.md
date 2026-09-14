@@ -275,7 +275,7 @@ jobs:
 | 호출부 파일 | `uses:` | 트리거 |
 |---|---|---|
 | `after-merge.yml` | `after-merge.yml@main` (릴리스 PR도 여기서 — 입력 `release-target`: 운영 브랜치(보통 `main`), `pre-merge-note`: 프로젝트별 안내 마크다운) | `pull_request: {types: [closed]}` |
-| `claude-review.yml` | `claude-review.yml@main` | `pull_request: {types: [opened, synchronize, ready_for_review, reopened]}` |
+| `claude-review.yml` | `claude-review.yml@main` | `pull_request: {types: [opened, synchronize, ready_for_review, reopened]}` — `notify-handle`을 쓰면 `workflow_run: {workflows: ["CI"], types: [completed]}`도 같은 `on:`에 추가한다(`notify-ready` job의 폴백 트리거, 아래 "알아둘 것" 참고) |
 | `claude-agent.yml` | `claude-agent.yml@main` | `issues: {types: [labeled]}` |
 | `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["CI", "Preview Smoke"], types: [completed]}` + `status:` |
 | `preview-smoke.yml` | `preview-smoke.yml@main` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
@@ -412,6 +412,17 @@ jobs:
   없다. 그리고 이때 actor가 `superokok-agent-ops[bot]`이 되므로 `allowed_bots`에 그 슬러그가
   들어 있어야 한다 — 안 그러면 `Workflow initiated by non-human actor`로 거부된다.
 
+- **담당자 지정(`notify-handle`)은 체크가 전부 초록이 된 뒤에만 한다(#55).**
+  `enable-auto-merge.yml`이 위험 경로를 감지한 순간 담당자를 붙이면, 그때는 리뷰 같은 다른
+  체크가 아직 도는 중이라 알림이 "머지 버튼이 아직 비활성"인 시점에 도착한다(실측:
+  위험 경로 감지 직후 담당자 지정 → `review`가 2분 29초를 더 돎). 그래서 담당자 지정은
+  `claude-review.yml`(리뷰가 보통 가장 긴 체크라 그 마지막 스텝에서 `mergeStateStatus ==
+  CLEAN`을 판정)과 `notify-ready` job(CI가 리뷰보다 늦게 끝나는 PR을 위한 `workflow_run`
+  폴백)으로 옮겼다. `enable-auto-merge.yml`의 같은 이름 입력은 이제 담당자를 붙이지 않고,
+  **이미 붙어 있으면 뗀다**(새 커밋으로 다시 위험해지면 "지금 눌러도 된다"가 거짓이
+  되므로). 두 호출부에 같은 `notify-handle` 값을 넘겨야 한다 — `do-not-merge` 라벨은
+  "상태"(사람이 머지한다), 담당자 지정은 "실행 가능 시점"(지금 눌러도 된다)이라는 서로
+  다른 의미이기 때문이다.
 - **`workflow_run` / `status` / `deployment_status` 트리거는 default 브랜치(`main`)에 있는
   호출부 파일이 동작한다.** 즉 그 파일들을 고치면 `develop`→`main` 릴리스 후에 효력이 생긴다.
 - **check-run 이름이 `잡이름 / 잡이름`이 된다.** 재사용 워크플로우를 부르면 GitHub이
