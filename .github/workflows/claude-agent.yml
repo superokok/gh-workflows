@@ -118,26 +118,14 @@ jobs:
           client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
 
-      - name: 판이 비었으면 가장 오래 기다린 이슈를 즉시 승격
+      - name: 판이 비었는지 · 다음 이슈가 뭔지 판정
+        id: plan
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           BASE: ${{ inputs.base-branch }}
         run: |
           set -euo pipefail
-
-          # remove-label → add-label 사이는 원자적이지 않다 — after-merge.yml의
-          # drain-queue와 같은 이유로 add-label은 재시도하고, 그래도 실패하면 되돌린다.
-          add_label_with_retry() {
-            local issue="$1" label="$2" attempts=5 delay=3 n=1
-            until gh issue edit "$issue" --repo "$REPO" --add-label "$label"; do
-              if [ "$n" -ge "$attempts" ]; then return 1; fi
-              echo "라벨 부착 실패 (#$issue → $label), ${delay}초 후 재시도 ($n/$attempts)"
-              sleep "$delay"
-              n=$((n + 1))
-              delay=$((delay * 2))
-            done
-          }
 
           # drain-queue(after-merge.yml)와 같은 기준: 릴리스 PR(base=main)과 Dependabot
           # PR은 세지 않는다 — Dependabot PR은 사람이 처리할 때까지 계속 열려 있어서 그대로
@@ -146,27 +134,69 @@ jobs:
           open=$(gh pr list --repo "$REPO" --base "$BASE" --state open --json number,author \
                    --jq '[.[] | select(.author.login != "dependabot[bot]")] | length')
           if [ "$open" != "0" ]; then
-            echo "열린 $BASE PR $open건(Dependabot 제외) — 대기 유지, 승격하지 않는다"; exit 0
+            echo "열린 $BASE PR $open건(Dependabot 제외) — 대기 유지, 승격하지 않는다"
+            echo "next=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           next=$(gh issue list --repo "$REPO" --state open --label agent-queued \
                    --json number,createdAt --jq 'sort_by(.createdAt) | (.[0].number // empty)')
           if [ -z "$next" ]; then
-            echo "agent-queued 이슈 없음 — 할 일 없음(라벨이 이미 바뀌었을 수 있다)"; exit 0
+            echo "agent-queued 이슈 없음 — 할 일 없음(라벨이 이미 바뀌었을 수 있다)"
+          else
+            echo "판이 비어 있음 — 가장 오래 기다린 #$next 를 즉시 승격한다"
           fi
+          echo "next=$next" >> "$GITHUB_OUTPUT"
 
-          echo "판이 비어 있음 — 가장 오래 기다린 #$next 를 즉시 승격한다"
-          gh issue edit "$next" --repo "$REPO" --remove-label agent-queued
-          gh issue comment "$next" --repo "$REPO" \
+      # remove-label → add-label 사이는 원자적이지 않다. 두 호출 모두 재시도하는
+      # 이유·백오프 값은 .github/actions/label-with-retry 참고 — after-merge.yml의
+      # drain-queue와 로직을 공유한다(PR #53 리뷰 지적, #54).
+      - name: agent-queued 라벨 제거
+        id: remove-queued
+        if: steps.plan.outputs.next != ''
+        uses: superokok/gh-workflows/.github/actions/label-with-retry@main
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          repo: ${{ github.repository }}
+          issue: ${{ steps.plan.outputs.next }}
+          label: agent-queued
+          mode: remove
+
+      - name: 즉시 착수 안내 댓글
+        if: steps.plan.outputs.next != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          NEXT: ${{ steps.plan.outputs.next }}
+        run: |
+          gh issue comment "$NEXT" --repo "$REPO" \
             --body "판이 비어 있어 대기 없이 바로 착수합니다." || echo "댓글 실패 — 계속 진행"
-          # 라벨 부착이 claude-agent.yml의 agent job을 깨운다. 마지막에 붙인다.
-          if ! add_label_with_retry "$next" agent; then
-            echo "::error::#$next 에 agent 라벨을 붙이지 못했다 — agent-queued로 되돌린다"
-            gh issue edit "$next" --repo "$REPO" --add-label agent-queued || true
-            gh issue comment "$next" --repo "$REPO" \
-              --body "⚠️ 즉시 착수 중 agent 라벨 부착에 실패해 agent-queued로 되돌렸습니다. 다음 판이 빌 때 다시 시도됩니다." || true
-            exit 1
-          fi
+
+      # 라벨 부착이 claude-agent.yml의 agent job을 깨운다. 마지막에 붙인다.
+      - name: agent 라벨 부착
+        id: add-agent
+        if: steps.plan.outputs.next != ''
+        continue-on-error: true
+        uses: superokok/gh-workflows/.github/actions/label-with-retry@main
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          repo: ${{ github.repository }}
+          issue: ${{ steps.plan.outputs.next }}
+          label: agent
+          mode: add
+
+      - name: 부착 실패 시 agent-queued로 되돌림
+        if: steps.plan.outputs.next != '' && steps.add-agent.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          NEXT: ${{ steps.plan.outputs.next }}
+        run: |
+          echo "::error::#$NEXT 에 agent 라벨을 붙이지 못했다 — agent-queued로 되돌린다"
+          gh issue edit "$NEXT" --repo "$REPO" --add-label agent-queued || true
+          gh issue comment "$NEXT" --repo "$REPO" \
+            --body "⚠️ 즉시 착수 중 agent 라벨 부착에 실패해 agent-queued로 되돌렸습니다. 다음 판이 빌 때 다시 시도됩니다." || true
+          exit 1
 
   agent:
     if: github.event.label.name == 'agent'

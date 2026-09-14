@@ -233,12 +233,27 @@ jobs:
 
           # remove-label → add-label 사이는 원자적이지 않다. 그 사이 gh API 호출이
           # 일시적으로 실패하면 이슈가 양쪽 라벨 다 없는 채로 큐에서 영구히 빠진다.
-          # add-label은 재시도하고, 그래도 실패하면 직전 라벨로 되돌리며 시끄럽게 알린다.
-          add_label_with_retry() {
-            local issue="$1" label="$2" attempts=5 delay=3 n=1
-            until gh issue edit "$issue" --repo "$REPO" --add-label "$label"; do
+          # 그래서 add든 remove든 똑같이 재시도한다 — add가 그래도 다 실패하면 직전
+          # 라벨로 되돌리며 시끄럽게 알린다(remove는 되돌릴 "직전 상태"가 모호해서
+          # 그 처리까지는 하지 않는다).
+          #
+          # .github/actions/label-with-retry에 같은 로직이 composite action으로도
+          # 있다(claude-agent.yml의 wake-if-idle이 씀, PR #53 리뷰 지적 #54) — 이 스텝은
+          # 여러 단계를 하나로 합쳐 `id: drain-queue`의 outcome 하나로 노출하고 있어서
+          # (아래 "정리 결과 요약" 스텝, PR #24 리뷰 지적 #26) 그 action을 쓰려면 다시
+          # 여러 스텝으로 쪼개야 한다 — 여기서는 하지 않는다. 로직이 갈라지지 않도록
+          # 고칠 때 양쪽 다 같이 본다.
+          label_with_retry() {
+            local mode="$1" issue="$2" label="$3" attempts=5 delay=3 n=1
+            local flag
+            case "$mode" in
+              add) flag="--add-label" ;;
+              remove) flag="--remove-label" ;;
+              *) echo "::error::알 수 없는 mode: $mode"; return 1 ;;
+            esac
+            until gh issue edit "$issue" --repo "$REPO" "$flag" "$label"; do
               if [ "$n" -ge "$attempts" ]; then return 1; fi
-              echo "라벨 부착 실패 (#$issue → $label), ${delay}초 후 재시도 ($n/$attempts)"
+              echo "라벨 $mode 실패 (#$issue → $label), ${delay}초 후 재시도 ($n/$attempts)"
               sleep "$delay"
               n=$((n + 1))
               delay=$((delay * 2))
@@ -267,11 +282,14 @@ jobs:
 
           if [ -n "$next" ]; then
             echo "큐에서 #$next 를 깨운다"
-            gh issue edit "$next" --repo "$REPO" --remove-label agent-queued
+            if ! label_with_retry remove "$next" agent-queued; then
+              echo "::error::#$next 에서 agent-queued 라벨을 떼지 못했다"
+              exit 1
+            fi
             # 댓글은 부가 정보일 뿐이니 실패해도 라벨 복구를 막지 않는다.
             gh issue comment "$next" --repo "$REPO"               --body "앞 PR이 닫혀 판이 비었습니다 — 이어서 착수합니다." || echo "댓글 실패 — 계속 진행"
             # 라벨 부착이 claude-agent.yml을 깨운다. 마지막에 붙인다.
-            if ! add_label_with_retry "$next" agent; then
+            if ! label_with_retry add "$next" agent; then
               echo "::error::#$next 에 agent 라벨을 붙이지 못했다 — agent-queued로 되돌린다"
               gh issue edit "$next" --repo "$REPO" --add-label agent-queued || true
               gh issue comment "$next" --repo "$REPO"                 --body "⚠️ 큐 재개 중 agent 라벨 부착에 실패해 agent-queued로 되돌렸습니다. 다음 판이 빌 때 다시 시도됩니다." || true
@@ -292,9 +310,12 @@ jobs:
           if [ -z "$stalled" ]; then echo "대기 중인 이슈 없음"; exit 0; fi
 
           echo "정지한 것으로 보이는 #$stalled 를 되살린다"
-          gh issue edit "$stalled" --repo "$REPO" --remove-label agent
+          if ! label_with_retry remove "$stalled" agent; then
+            echo "::error::#$stalled 에서 agent 라벨을 떼지 못했다 — 정지 복구를 포기한다"
+            exit 1
+          fi
           sleep 2
-          if ! add_label_with_retry "$stalled" agent; then
+          if ! label_with_retry add "$stalled" agent; then
             echo "::error::#$stalled 에 agent 라벨을 다시 붙이지 못했다 — 라벨이 빠진 채로 남았다"
             gh issue comment "$stalled" --repo "$REPO"               --body "⚠️ 정지 복구 중 agent 라벨 재부착에 실패했습니다. 라벨이 빠진 채로 남아있으니 수동 확인이 필요합니다." || true
             exit 1
