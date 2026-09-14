@@ -304,6 +304,12 @@ jobs:
 > devDepth(Spring Boot + Next.js + Expo)가 2026-09-12에 정확히 이걸로 멈췄다:
 > prisma가 의존성에 없으니 `npx`가 최신 rc를 받아왔고 거기엔 `generate`가 없어 exit 2.
 > 다른 커맨드 문자열 입력과 같은 규칙으로, **빈 문자열이면 그 단계를 건너뛴다.**
+>
+> **JVM 스택은 `java-version`(기본값 `""`)을 넘긴다** — `check.yml`과 같은 패턴이다.
+> 빈 문자열이면 `setup-java`를 건너뛰므로 기존 호출부는 그대로다. 다만 `setup-node`는
+> (위 문단대로) `node-version`이 아니라 `install`에 물려 있다 — install → prepare → verify가
+> 순차 파이프라인이라 Node 셋업만 따로 끄면 어중간한 상태가 남기 때문이다. `install: ""`로
+> Node 파이프라인 전체를 끄고 `java-version`만 넘기면 JVM 전용 저장소도 검증이 돈다.
 
 ## 알아둘 것
 
