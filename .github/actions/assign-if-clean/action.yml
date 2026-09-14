@@ -1,0 +1,73 @@
+name: CLEAN이면 담당자 지정
+description: >
+  `do-not-merge` 라벨이 붙은 PR이 mergeable=MERGEABLE && mergeStateStatus=CLEAN이 되면
+  notify-handle을 담당자·리뷰어로 지정한다. claude-review.yml의 `review` job(리뷰 직후
+  판정, 재시도로 비동기 반영을 기다림)과 `notify-ready` job(workflow_run 폴백, 단발 판정)이
+  거의 동일한 로직을 각자 들고 있던 것을 한 곳으로 모은 것.
+  절대 실패로 끝나지 않는다(fail-open) — 호출부가 `set -e` 없이 흘려보내는 대신, 이
+  action 안에서 모든 실패를 무해하게 처리한다.
+
+inputs:
+  github-token:
+    description: gh CLI가 쓸 토큰 (GH_TOKEN)
+    required: true
+  repo:
+    description: "owner/repo"
+    required: true
+  pr:
+    description: PR 번호
+    required: true
+  notify-handle:
+    description: 담당자·리뷰어로 지정할 핸들
+    required: true
+  attempts:
+    description: mergeable/mergeStateStatus 재확인 최대 횟수 (1이면 재시도 없이 한 번만 본다)
+    required: false
+    default: "1"
+  interval-seconds:
+    description: 재확인 사이 대기 초
+    required: false
+    default: "15"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ inputs.repo }}
+        PR: ${{ inputs.pr }}
+        NOTIFY_HANDLE: ${{ inputs.notify-handle }}
+        ATTEMPTS: ${{ inputs.attempts }}
+        INTERVAL: ${{ inputs.interval-seconds }}
+      run: |
+        set -uo pipefail
+
+        labels=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '.labels[].name' 2>/dev/null)
+        if ! printf '%s\n' "$labels" | grep -qxF 'do-not-merge'; then
+          echo "do-not-merge 아님 — auto-merge 대상이라 담당자 알림이 필요 없다"; exit 0
+        fi
+
+        assignees=$(gh pr view "$PR" --repo "$REPO" --json assignees --jq '.assignees[].login' 2>/dev/null)
+        if printf '%s\n' "$assignees" | grep -qxF "$NOTIFY_HANDLE"; then
+          echo "이미 담당자 — 중복 알림 방지, 스킵"; exit 0
+        fi
+
+        for i in $(seq 1 "$ATTEMPTS"); do
+          info=$(gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus 2>/dev/null)
+          mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
+          status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
+
+          if [ "$mergeable" = "MERGEABLE" ] && [ "$status" = "CLEAN" ]; then
+            gh pr edit "$PR" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>/dev/null || true
+            gh pr edit "$PR" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" 2>/dev/null || true
+            echo "담당자 지정함 (mergeable=$mergeable, status=$status)"
+            exit 0
+          fi
+
+          echo "아직 CLEAN 아님 (mergeable=$mergeable, status=$status, 시도 $i/$ATTEMPTS)"
+          [ "$i" -lt "$ATTEMPTS" ] && sleep "$INTERVAL"
+        done
+
+        echo "재확인 다 소진 — CLEAN 안 됨, 호출부의 폴백에 맡긴다"
+        exit 0

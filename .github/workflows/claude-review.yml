@@ -291,45 +291,18 @@ jobs:
       # 쓰지 않고 모든 실패를 무해하게 흘려보낸다(fail-open).
       - name: 초록이면 담당자 지정
         if: inputs.notify-handle != ''
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          NOTIFY_HANDLE: ${{ inputs.notify-handle }}
-        run: |
-          set -uo pipefail
-
-          labels=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '.labels[].name' 2>/dev/null)
-          if ! printf '%s\n' "$labels" | grep -qxF 'do-not-merge'; then
-            echo "do-not-merge 아님 — auto-merge 대상이라 담당자 알림이 필요 없다"; exit 0
-          fi
-
-          assignees=$(gh pr view "$PR" --repo "$REPO" --json assignees --jq '.assignees[].login' 2>/dev/null)
-          if printf '%s\n' "$assignees" | grep -qxF "$NOTIFY_HANDLE"; then
-            echo "이미 담당자 — 중복 알림 방지, 스킵"; exit 0
-          fi
-
+        uses: superokok/gh-workflows/.github/actions/assign-if-clean@main
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          repo: ${{ github.repository }}
+          pr: ${{ github.event.pull_request.number }}
+          notify-handle: ${{ inputs.notify-handle }}
           # mergeStateStatus는 비동기라 방금 끝난 체크가 아직 반영 안 됐을 수 있다(UNKNOWN).
           # 15초 간격으로 최대 90초 재확인한다 — 이 job은 리뷰로 이미 과금됐으므로 여기서
-          # 기다리는 건 추가 비용이 없다.
-          for i in 1 2 3 4 5 6; do
-            info=$(gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus 2>/dev/null)
-            mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
-            status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
-
-            if [ "$mergeable" = "MERGEABLE" ] && [ "$status" = "CLEAN" ]; then
-              gh pr edit "$PR" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>/dev/null || true
-              gh pr edit "$PR" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" 2>/dev/null || true
-              echo "담당자 지정함 (mergeable=$mergeable, status=$status)"
-              exit 0
-            fi
-
-            echo "아직 CLEAN 아님 (mergeable=$mergeable, status=$status, 시도 $i/6)"
-            [ "$i" -lt 6 ] && sleep 15
-          done
-
-          echo "90초 내 CLEAN이 안 됨 — notify-ready(폴백)가 CI 완료 시 다시 판정한다"
-          exit 0
+          # 기다리는 건 추가 비용이 없다. 90초 내 CLEAN이 안 되면 notify-ready(폴백)가
+          # CI 완료 시 다시 판정한다.
+          attempts: "7"
+          interval-seconds: "15"
 
   # ── 폴백: CI가 리뷰보다 늦게 끝나는 PR을 위한 가벼운 판정 job (#55) ────────────
   # 위 `review` job의 마지막 스텝은 리뷰가 끝나는 시점에 한 번만 CLEAN을 확인한다.
@@ -360,39 +333,27 @@ jobs:
           client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
 
-      - name: 대상 PR 찾아 초록이면 담당자 지정
+      - name: 대상 PR 번호 찾기
+        id: find-pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           BASE: ${{ inputs.base-branch }}
-          NOTIFY_HANDLE: ${{ inputs.notify-handle }}
         run: |
           set -uo pipefail
 
           num=$(gh api "repos/$REPO/commits/$SHA/pulls" --paginate 2>/dev/null \
                   | jq -r --arg base "$BASE" \
                       '[.[] | select(.base.ref == $base and .state == "open")] | (.[0].number // empty)')
-          if [ -z "$num" ]; then echo "$BASE 대상 열린 PR 없음 — 스킵"; exit 0; fi
+          if [ -z "$num" ]; then echo "$BASE 대상 열린 PR 없음 — 스킵"; fi
+          echo "pr=$num" >> "$GITHUB_OUTPUT"
 
-          labels=$(gh pr view "$num" --repo "$REPO" --json labels --jq '.labels[].name' 2>/dev/null)
-          if ! printf '%s\n' "$labels" | grep -qxF 'do-not-merge'; then
-            echo "do-not-merge 아님 — 스킵"; exit 0
-          fi
-
-          assignees=$(gh pr view "$num" --repo "$REPO" --json assignees --jq '.assignees[].login' 2>/dev/null)
-          if printf '%s\n' "$assignees" | grep -qxF "$NOTIFY_HANDLE"; then
-            echo "이미 담당자 — 스킵(멱등, 주 경로가 이미 처리한 흔한 경우)"; exit 0
-          fi
-
-          info=$(gh pr view "$num" --repo "$REPO" --json mergeable,mergeStateStatus 2>/dev/null)
-          mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
-          status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
-
-          if [ "$mergeable" = "MERGEABLE" ] && [ "$status" = "CLEAN" ]; then
-            gh pr edit "$num" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>/dev/null || true
-            gh pr edit "$num" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" 2>/dev/null || true
-            echo "담당자 지정함 (폴백 경로, mergeable=$mergeable, status=$status)"
-          else
-            echo "아직 CLEAN 아님 (mergeable=$mergeable, status=$status) — 스킵"
-          fi
+      - name: 초록이면 담당자 지정 (폴백 경로)
+        if: steps.find-pr.outputs.pr != ''
+        uses: superokok/gh-workflows/.github/actions/assign-if-clean@main
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          repo: ${{ github.repository }}
+          pr: ${{ steps.find-pr.outputs.pr }}
+          notify-handle: ${{ inputs.notify-handle }}
