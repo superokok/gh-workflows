@@ -41,10 +41,15 @@ name: Claude Review (reusable)
 #     timed_out/action_required로 끝남                     → 담당자 지정 + 원인 코멘트
 #   - 아직 pending/in_progress                              → 아무것도 하지 않는다 (#55 그대로)
 # `mergeStateStatus`만으로는 "미완"과 "실패"를 구분할 수 없다(둘 다 `BLOCKED`) — 그래서
-# `commits/{sha}/check-runs`의 결론을 브랜치 보호 필수 체크 목록과 교차해서 판정한다
-# (`branches/{branch}/protection/required_status_checks` 조회에는 GitHub App
-# **Administration(read)** 권한이 필요하다 — 없으면 목록을 못 읽어 조용히 빨간불 판정을
-# 하지 않는다. 오탐보다 무판정이 낫다는 판단이다). `claude-fix.yml`이 붙어 있는
+# `commits/{sha}/check-runs`의 결론을 **PR에 보고된 체크 목록**(`statusCheckRollup`)과
+# 교차해서 판정한다.
+#
+# 브랜치 보호(`branches/{branch}/protection/required_status_checks`)를 쓰지 않는다:
+# 그 조회는 GitHub App **Administration(read)** 권한을 요구하는데 에이전트 App엔 없어서
+# 404가 돌아온다. 2026-09-14 PR #63에서 이 호출이 스텝의 첫 실패였고, `bash -e` 때문에
+# 스텝이 출력 없이 죽어 `review / review`가 빨간불이 되며 **멀쩡한 PR이 머지 불가로
+# 굳었다.** `statusCheckRollup`은 추가 권한이 필요 없다 — 대신 "필수"와 "자문용"을
+# 구분하지 않으므로, 비필수 체크를 추가하게 되면 이 가정을 다시 검토한다. `claude-fix.yml`이 붙어 있는
 # 저장소라면 자동 수정이 먼저 시도되게 양보한다 — `<!-- claude-fix:attempt -->` 마커가
 # 있고 아직 `<!-- claude-fix:gave-up -->`이 없으면(= 아직 재시도 중) 판정을 건너뛴다.
 # 중복 알림 방지는 SHA별 마커(`<!-- gate:checks-red:$SHA -->`)로 한다 — 같은 커밋에는
@@ -309,8 +314,14 @@ jobs:
       # 사람이 판단해야 한다(없으면 이 스텝이 직접 `do-not-merge`를 붙인다).
       #
       # 이 스텝은 **절대로 job을 실패시키면 안 된다** — `review`는 필수 체크라, 여기서
-      # 실패하면 순수 알림 기능 하나 때문에 멀쩡한 PR의 머지가 막힌다. 그래서 `set -e`를
-      # 쓰지 않고 모든 실패를 무해하게 흘려보낸다(fail-open).
+      # 실패하면 순수 알림 기능 하나 때문에 멀쩡한 PR의 머지가 막힌다.
+      #
+      # **`set -e`를 "쓰지 않는" 것으로는 부족하다.** GitHub은 `run:`의 기본 셸을
+      # `bash -e {0}`로 호출하므로 errexit이 **이미 켜진 채로** 시작한다 — `set +e`로
+      # 명시적으로 꺼야 한다. 2026-09-14 PR #63에서 이걸 놓쳐, 첫 파이프라인이 실패하자
+      # 출력 한 줄 없이 exit 1이 나고 `review / review`가 빨간불이 되어 **멀쩡한 PR이
+      # 머지 불가로 굳었다** — 알림 기능이 게이트를 망가뜨렸다.
+      # `-u`도 걸지 않는다: unbound 변수는 errexit과 무관하게 셸을 죽여 fail-open과 어긋난다.
       - name: 체크 결과에 따라 담당자 지정
         if: inputs.notify-handle != ''
         env:
@@ -318,15 +329,19 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}
-          BASE: ${{ inputs.base-branch }}
           NOTIFY_HANDLE: ${{ inputs.notify-handle }}
         run: |
-          set -uo pipefail
+          set +e
+          set -o pipefail
 
-          # 필수 체크 목록(브랜치 보호). 못 읽으면(권한 부족 등) 빨간불 판정을 하지
-          # 않는다 — 뭐가 필수인지 모르는 채로 판정하면 오탐이 난다.
-          required=$(gh api "repos/$REPO/branches/$BASE/protection/required_status_checks" 2>/dev/null \
-                       | jq -r '((.checks // [])[] .context), (.contexts[]? // empty)' 2>/dev/null \
+          # 판정 대상 체크 목록. **브랜치 보호 API를 쓰지 않는다** —
+          # `repos/{r}/branches/{b}/protection/...`는 admin 권한을 요구하는데 에이전트 App
+          # 토큰엔 그게 없어 404가 돌아온다(2026-09-14 PR #63에서 이 호출이 첫 실패였다).
+          # 대신 PR에 **보고된 체크 전체**를 본다 — 권한이 필요 없고, 이 저장소들에는
+          # 자문용 체크가 없어서 "실패한 체크가 있으면 사람이 봐야 한다"가 그대로 성립한다.
+          # 비필수 체크를 추가하게 되면 이 가정을 다시 검토한다.
+          required=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup \
+                       --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
                        | sort -u)
 
           # 이름별 최신 check-run 결론 중 필수 체크가 실패류로 끝난 게 있는지 본다.
@@ -455,7 +470,8 @@ jobs:
           BASE: ${{ inputs.base-branch }}
           NOTIFY_HANDLE: ${{ inputs.notify-handle }}
         run: |
-          set -uo pipefail
+          set +e
+          set -o pipefail
 
           num=$(gh api "repos/$REPO/commits/$SHA/pulls" --paginate 2>/dev/null \
                   | jq -r --arg base "$BASE" \
@@ -479,11 +495,12 @@ jobs:
             exit 0
           fi
 
-          # 필수 체크 목록(브랜치 보호). 못 읽으면(권한 부족 등) 빨간불 판정을 하지 않는다.
-          required=$(gh api "repos/$REPO/branches/$BASE/protection/required_status_checks" 2>/dev/null \
-                       | jq -r '((.checks // [])[] .context), (.contexts[]? // empty)' 2>/dev/null \
+          # 판정 대상 체크 목록. 브랜치 보호 API를 쓰지 않는 이유는 `review` job의 같은
+          # 부분 주석 참고(admin 권한 필요 → App 토큰으로 404, PR #63).
+          required=$(gh pr view "$num" --repo "$REPO" --json statusCheckRollup \
+                       --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
                        | sort -u)
-          if [ -z "$required" ]; then echo "필수 체크 목록을 못 읽음 — 빨간불 판정 보류"; exit 0; fi
+          if [ -z "$required" ]; then echo "체크 목록이 비어 있음 — 빨간불 판정 보류"; exit 0; fi
 
           # claude-fix.yml이 아직 재시도 중이면 양보한다 — 자동 복구가 사람 호출보다 먼저다.
           comments=$(gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null)
