@@ -54,6 +54,12 @@ on:
           (Vercel 프리뷰가 없는 저장소는 `status` 트리거 자체가 오지 않는다)
         type: string
         default: "npm run build"
+      notify-handle:
+        description: |
+          자동 수정을 포기하고 사람에게 넘길 때 담당자로 지정할 GitHub 핸들(예: "octocat").
+          빈 문자열(기본값)이면 지정하지 않는다 — 기존 호출부는 무변화. (이슈 #46)
+        type: string
+        default: ""
 
 concurrency:
   group: claude-fix-${{ github.event.workflow_run.head_sha || github.event.sha }}
@@ -115,6 +121,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.workflow_run.head_sha || github.event.sha }}
+          NOTIFY_HANDLE: ${{ inputs.notify-handle }}
         run: |
           set -euo pipefail
           echo "run=false" >> "$GITHUB_OUTPUT"
@@ -137,12 +144,19 @@ jobs:
 
           if [ "$tries" -ge 2 ]; then
             gh pr edit "$num" --repo "$REPO" --add-label do-not-merge || true
+            if [ -n "$NOTIFY_HANDLE" ]; then
+              gh pr edit "$num" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" || true
+            fi
             if ! gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' \
                  | grep -qF '<!-- claude-fix:gave-up -->'; then
-              printf '%s\n\n%s\n' \
-                '🛑 **자동 수정 2회 실패** `[AGENT-ACTION-REQUIRED]` — 사람이 봐야 합니다. 실패한 워크플로우 로그를 확인해주세요.' \
-                '<!-- claude-fix:gave-up -->' \
-                | gh pr comment "$num" --repo "$REPO" --body-file -
+              {
+                if [ -n "$NOTIFY_HANDLE" ]; then
+                  printf '@%s\n\n' "$NOTIFY_HANDLE"
+                fi
+                printf '%s\n\n%s\n' \
+                  '🛑 **자동 수정 2회 실패** `[AGENT-ACTION-REQUIRED]` — 사람이 봐야 합니다. 실패한 워크플로우 로그를 확인해주세요.' \
+                  '<!-- claude-fix:gave-up -->'
+              } | gh pr comment "$num" --repo "$REPO" --body-file -
             fi
             echo "상한 초과 — 사람에게 인계"; exit 0
           fi
@@ -212,6 +226,7 @@ jobs:
                장애, 인프라)이거나 판단이 필요하면:
                  gh pr edit ${{ steps.target.outputs.pr }} --add-label do-not-merge
                  gh pr comment ${{ steps.target.outputs.pr }} --body "<원인과 필요한 조치>"
+               ${{ inputs.notify-handle != '' && format('담당자를 지정한다(watch 설정과 무관하게 알림이 간다): `gh pr edit {0} --add-assignee {1} || true`. 위 코멘트 본문 맨 앞줄에 `@{1}`을 넣는다.', steps.target.outputs.pr, inputs.notify-handle) || '' }}
                테스트를 지우거나 `skip` 처리하거나, 타입을 `any`로 덮거나, 게이트 자체를
                느슨하게 만드는 방식으로 초록불을 만드는 건 **금지**다.
 
