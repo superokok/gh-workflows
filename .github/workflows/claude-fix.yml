@@ -17,6 +17,13 @@ name: Claude Fix (red build → 수정 커밋) (reusable)
 on:
   workflow_call:
     inputs:
+      base-branch:
+        description: |
+          고칠 PR의 base. 통합 브랜치가 없으면 "main". (#60) 이 값이 없이 "develop"으로
+          하드코딩돼 있던 시절엔, 통합 브랜치가 없는 저장소(`base=main`)에서는 대상 PR을
+          영원히 못 찾아 self-fix가 조용히 아무 일도 안 했다.
+        type: string
+        default: "develop"
       node-version:
         type: string
         default: "22"
@@ -121,14 +128,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.workflow_run.head_sha || github.event.sha }}
+          BASE: ${{ inputs.base-branch }}
           NOTIFY_HANDLE: ${{ inputs.notify-handle }}
         run: |
           set -euo pipefail
           echo "run=false" >> "$GITHUB_OUTPUT"
 
           num=$(gh api "repos/$REPO/commits/$SHA/pulls" \
-                  --jq '[.[] | select(.base.ref=="develop" and .state=="open")] | (.[0].number // empty)')
-          if [ -z "$num" ]; then echo "develop 대상 열린 PR 없음 — 스킵"; exit 0; fi
+                  | jq -r --arg base "$BASE" \
+                      '[.[] | select(.base.ref==$base and .state=="open")] | (.[0].number // empty)')
+          if [ -z "$num" ]; then echo "$BASE 대상 열린 PR 없음 — 스킵"; exit 0; fi
 
           info=$(gh pr view "$num" --repo "$REPO" --json headRefName,headRefOid,isDraft)
           head=$(jq -r .headRefOid  <<<"$info")

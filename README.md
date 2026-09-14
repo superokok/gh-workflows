@@ -275,9 +275,9 @@ jobs:
 | 호출부 파일 | `uses:` | 트리거 |
 |---|---|---|
 | `after-merge.yml` | `after-merge.yml@main` (릴리스 PR도 여기서 — 입력 `release-target`: 운영 브랜치(보통 `main`), `pre-merge-note`: 프로젝트별 안내 마크다운) | `pull_request: {types: [closed]}` |
-| `claude-review.yml` | `claude-review.yml@main` | `pull_request: {types: [opened, synchronize, ready_for_review, reopened]}` — `notify-handle`을 쓰면 `workflow_run: {workflows: ["CI"], types: [completed]}`도 같은 `on:`에 추가한다(`notify-ready` job의 폴백 트리거, 아래 "알아둘 것" 참고) |
+| `claude-review.yml` | `claude-review.yml@main` | `pull_request: {types: [opened, synchronize, ready_for_review, reopened]}` — `notify-handle`을 쓰면 `workflow_run: {workflows: ["CI", "Claude Review"], types: [completed]}`도 같은 `on:`에 추가한다(`notify-ready` job의 폴백 트리거, 아래 "알아둘 것" 참고). 목록에 **이 워크플로우 자신의 `name`도 넣는다** — 안 넣으면 `review` job 자신이 startup_failure 등으로 죽었을 때(#60) 아무도 감지하지 못한다 |
 | `claude-agent.yml` | `claude-agent.yml@main` | `issues: {types: [labeled]}` |
-| `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["CI", "Preview Smoke"], types: [completed]}` + `status:` |
+| `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["CI", "Preview Smoke"], types: [completed]}` + `status:`. `base-branch` 입력(기본값 `"develop"`)을 통합 브랜치에 맞게 넘긴다 — 안 넘기면 `base=main`인 저장소에서는 대상 PR을 영원히 못 찾는다(#60) |
 | `preview-smoke.yml` | `preview-smoke.yml@main` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
 | `release-pr.yml` | `release-pr.yml@main` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
 
@@ -412,17 +412,29 @@ jobs:
   없다. 그리고 이때 actor가 `superokok-agent-ops[bot]`이 되므로 `allowed_bots`에 그 슬러그가
   들어 있어야 한다 — 안 그러면 `Workflow initiated by non-human actor`로 거부된다.
 
-- **담당자 지정(`notify-handle`)은 체크가 전부 초록이 된 뒤에만 한다(#55).**
-  `enable-auto-merge.yml`이 위험 경로를 감지한 순간 담당자를 붙이면, 그때는 리뷰 같은 다른
-  체크가 아직 도는 중이라 알림이 "머지 버튼이 아직 비활성"인 시점에 도착한다(실측:
-  위험 경로 감지 직후 담당자 지정 → `review`가 2분 29초를 더 돎). 그래서 담당자 지정은
-  `claude-review.yml`(리뷰가 보통 가장 긴 체크라 그 마지막 스텝에서 `mergeStateStatus ==
-  CLEAN`을 판정)과 `notify-ready` job(CI가 리뷰보다 늦게 끝나는 PR을 위한 `workflow_run`
-  폴백)으로 옮겼다. `enable-auto-merge.yml`의 같은 이름 입력은 이제 담당자를 붙이지 않고,
-  **이미 붙어 있으면 뗀다**(새 커밋으로 다시 위험해지면 "지금 눌러도 된다"가 거짓이
-  되므로). 두 호출부에 같은 `notify-handle` 값을 넘겨야 한다 — `do-not-merge` 라벨은
-  "상태"(사람이 머지한다), 담당자 지정은 "실행 가능 시점"(지금 눌러도 된다)이라는 서로
-  다른 의미이기 때문이다.
+- **담당자 지정(`notify-handle`)은 체크가 전부 초록이 되거나, 필수 체크가 실패로 끝나
+  자동으로는 영영 초록이 안 될 때 한다(#55·#60).** `enable-auto-merge.yml`이 위험 경로를
+  감지한 순간 담당자를 붙이면, 그때는 리뷰 같은 다른 체크가 아직 도는 중이라 알림이
+  "머지 버튼이 아직 비활성"인 시점에 도착한다(실측: 위험 경로 감지 직후 담당자 지정 →
+  `review`가 2분 29초를 더 돎). 그래서 담당자 지정은 `claude-review.yml`(리뷰가 보통
+  가장 긴 체크라 그 마지막 스텝에서 판정)과 `notify-ready` job(CI가 리뷰보다 늦게
+  끝나거나 `review` job 자신이 죽은 PR을 위한 `workflow_run` 폴백)으로 옮겼다.
+  `enable-auto-merge.yml`의 같은 이름 입력은 이제 담당자를 붙이지 않고, **이미 붙어
+  있으면 뗀다**(새 커밋으로 다시 위험해지면 "지금 눌러도 된다"가 거짓이 되므로). 두
+  호출부에 같은 `notify-handle` 값을 넘겨야 한다 — `do-not-merge` 라벨은 "상태"(사람이
+  머지한다), 담당자 지정은 "실행 가능 시점"(지금 눌러도 된다 / 지금 판단해야 한다)이라는
+  서로 다른 의미이기 때문이다.
+
+  **#55는 "초록이면 담당자"만 만들고 "실패하면 담당자"를 없애는 회귀를 냈다** — 체크가
+  실패한 PR은 `mergeStateStatus`가 영원히 `CLEAN`이 되지 않아(`BLOCKED`로 굳는데, 이 값은
+  "아직 안 끝남"과 "실패로 끝남"을 구분하지 못한다) 담당자도 알림도 영영 오지 않았다
+  (실측: 이 저장소 PR #59에서 `review / review`가 `startup_failure`로 죽었는데도 아무도
+  불려오지 않았다). `claude-review.yml`은 이제 `commits/{sha}/check-runs`의 결론을
+  브랜치 보호 필수 체크 목록과 교차해서 세 번째 갈래(필수 체크 실패)를 판정한다 — 이
+  조회에는 GitHub App **Administration(read)** 권한이 필요하다. 없으면 목록을 못 읽어
+  빨간불 판정을 하지 않는다(오탐보다 무판정이 낫다). `claude-fix.yml`이 아직 재시도
+  중이면(`<!-- claude-fix:attempt -->`는 있고 `<!-- claude-fix:gave-up -->`은 없음) 자동
+  복구가 먼저이므로 판정을 양보한다.
 - **`workflow_run` / `status` / `deployment_status` 트리거는 default 브랜치(`main`)에 있는
   호출부 파일이 동작한다.** 즉 그 파일들을 고치면 `develop`→`main` 릴리스 후에 효력이 생긴다.
 - **check-run 이름이 `잡이름 / 잡이름`이 된다.** 재사용 워크플로우를 부르면 GitHub이
@@ -470,7 +482,29 @@ jobs:
 | `self-lint.yml` | `actionlint`로 워크플로우 YAML 검증. 여깔 `package.json`이 없어 `check.yml`을 못 쓴다 |
 | `self-review.yml` | 이 저장소 PR에도 2차 AI 리뷰 |
 | `self-agent.yml` | `agent` 라벨 이슈 → PR |
+| `self-fix.yml` | `self-lint`(워크플로우 이름 `Lint`)가 빨간불이면 자가 치유 (#60) |
 | `self-after-merge.yml` | PR 머지 후 이슈 닫기·브랜치 정리 |
+
+> **`self-fix.yml`은 2026-09-07 분리 때 빠져 있었다(#60).** `claude-fix.yml`을 소유하고
+> 있으면서 자기 자신에게는 부르지 않아서, 이 저장소의 빨간불은 `self-review`가 담당자를
+> 붙일 수 있게 된 뒤(#55·#60)를 빼면 고쳐지지도 알려지지도 않았다. 추가하면서
+> `claude-fix.yml`의 대상 PR 탐색이 `base.ref=="develop"`으로 하드코딩돼 있던 것도 같이
+> 고쳤다 — `base-branch` 입력이 없어서, 통합 브랜치가 없는(`base=main`) 이 저장소에서는
+> 대상 PR을 영원히 못 찾아 조용히 아무 일도 안 했을 것이다.
+>
+> **`@claude` 멘션 응답 워크플로우(`claude.yml`)는 이번에 추가하지 않는다.** 위 "나머지"
+> 표 바로 아래에 적혀 있듯 그 파일은 `/install-github-app`이 대상 저장소에 직접 만들어
+> 주는 것이지, 이 저장소가 재사용 워크플로우로 배포하는 종류가 아니다 — 즉 "추가"는
+> 코드 변경이 아니라 이 저장소에 대고 `/install-github-app`을 한 번 실행하는 **사람의
+> 설정 작업**이다. 지금 아쉬운 점을 확인해보면: 이 저장소의 `self-agent.yml`은
+> `plan-only-paths: ""`로 호출돼 사전 계획 게이트가 애초에 걸리지 않으므로, "계획에
+> 동의하면 `@claude 진행해줘`로 재개" 경로는 이 저장소 자신의 이슈에서는 쓰일 일이
+> 없다. 남는 경우는 리뷰 후속 이슈(깊이 제한, `claude-review.yml` 4-b)뿐인데, 거기서도
+> 이미 "`agent` 라벨을 다시 붙이셔도 됩니다"라는 대체 재개 경로를 안내하고 있어 막히지
+> 않는다 — `@claude` 부재가 이 저장소 자신의 루프를 끊지는 않는다는 뜻이다. `develop`이
+> 없는 단일 브랜치 구조라 devDepth의 `claude.yml`을 그대로 옮겨 붙일 수도 없다(체크아웃
+> 기준이 다르다). 다음에 이 질문이 다시 나오면: 필요해지면 `/install-github-app superokok/gh-workflows`를
+> 실행하면 되고, 그전까지는 위 이유로 보류한다.
 
 > ⚠️ **`self-*`는 이 저장소 자신의 시크릿을 쓴다.** 재사용 워크플로우를 "라이브러리"로만
 > 쓸 땐 여기 시크릿이 필요 없었지만, 자기 루프를 돌리는 순간 필요해진다 —

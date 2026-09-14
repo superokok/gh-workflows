@@ -8,10 +8,21 @@ name: Claude Review
 #
 # 고위험이면 `do-not-merge`가 붙는다. 이 저장소엔 auto-merge가 없어서 라벨이 없어도
 # 사람이 머지하지만, 라벨은 "그냥 보지 말고 이건 특히 봐라"는 신호로 남는다.
+#
+# 2026-09-14(#60): `notify-handle`을 넘겨서 체크 결과(초록/빨간불)에 따라 담당자를
+# 지정하게 했다 — 안 그러면 이 저장소 PR의 빨간불은 아무도 모른다(claude-review.yml
+# 상단 "2026-09-14(#60)" 주석 참고, 실측: PR #59). `workflow_run: {workflows: ["Claude
+# Review", "Lint"]}`를 함께 걸어 `notify-ready` 폴백을 켠다 — `Lint`(이 저장소의 CI)가
+# 리뷰보다 늦게 끝나는 경우뿐 아니라, **`review` job 자신이 startup_failure로 죽어 그
+# job의 담당자 지정 스텝조차 못 도는 경우**까지 잡으려면 이 워크플로우 자신의 이름도
+# 목록에 있어야 한다.
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
+  workflow_run:
+    workflows: ["Claude Review", "Lint"]
+    types: [completed]
 
 jobs:
   review:
@@ -20,7 +31,12 @@ jobs:
     # `create-github-app-token`부터 빈 값으로 실패해 **외부 PR마다 빨간불**이 나고 분도
     # 나간다 — 리뷰는 한 줄도 못 하면서. 누출이 아니라 잡음이라 조용히 건너뛴다.
     # 외부 PR도 `self-lint`(시크릿 불필요)는 그대로 돌아 actionlint 피드백은 받는다.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    #
+    # `workflow_run` 이벤트에는 `pull_request` 컨텍스트가 없다 — 이 조건을 그대로 두면
+    # (`github.event.pull_request`가 없어 좌변이 빈 값이 되므로) `notify-ready` 폴백
+    # job까지 통째로 스킵된다. `workflow_run`은 애초에 fork에서 오지 않으므로(base
+    # 저장소 컨텍스트에서만 발생) 그때는 이 가드를 걸 필요가 없다.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # 호출부가 권한을 명시해야 한다 — 안 그러면 repo 기본 토큰 권한(id-token 없음)으로
     # 시작해서, id-token: write를 요구하는 불린 워크플로우가 startup_failure로 죽는다.
     # (2026-09-07 kitchen-tempo에서 실제로 겪음 — Claude Review가 전부 죽어 자동 머지가
@@ -38,3 +54,4 @@ jobs:
       # 리뷰가 22 job / 131분(전체의 18%)을 먹었다. `low`는 "적지만 확신도 높은 findings"라
       # 작은 diff에 맞는다 — 고위험 차단 판정은 레벨과 무관하게 그대로 동작한다.
       review-level: low
+      notify-handle: superokok

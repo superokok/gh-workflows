@@ -1,0 +1,38 @@
+name: Self Fix (red build → 수정 커밋)
+
+# 이 저장소 자신의 자가 치유. `claude-fix.yml`을 소유하고 있으면서 정작 자기 자신에게는
+# 부르지 않고 있었다(#60) — 그래서 이 저장소의 빨간불은 `self-review`가 담당자를 붙일 수
+# 있을 때(#55)를 빼면 아무도 고치지도, 알리지도 않았다.
+#
+# 로컬 경로(`./`)로 부른다: 여기가 원본이라 `@main`으로 부르면 PR 브랜치의 변경이
+# 아니라 이미 머지된 버전이 돌아버린다(self-review.yml·self-agent.yml과 같은 이유).
+#
+# 이 저장소의 CI는 `self-lint.yml`(워크플로우 이름 "Lint") 하나뿐이다 — Vercel도
+# Preview Smoke도 없으므로 `status:` 트리거는 걸지 않는다.
+
+on:
+  workflow_run:
+    workflows: ["Lint"]
+    types: [completed]
+
+jobs:
+  fix:
+    # 호출부가 권한을 명시해야 한다 — 안 그러면 repo 기본 토큰 권한(id-token 없음)으로
+    # 시작해서, id-token: write를 요구하는 불린 워크플로우가 startup_failure로 죽는다.
+    # (claude-review.yml·claude-agent.yml과 같은 이유 — README "알아둘 것" 참고.)
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    uses: ./.github/workflows/claude-fix.yml
+    secrets: inherit
+    with:
+      base-branch: main
+      # YAML만 있는 저장소 — Node 셋업/설치/코드생성/빌드 단계가 통째로 필요 없다
+      install: ""
+      prepare: ""
+      build: ""
+      verify: "bash scripts/lint-workflows.sh"
+      notify-handle: superokok
