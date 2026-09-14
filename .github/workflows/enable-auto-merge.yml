@@ -39,11 +39,19 @@ on:
       notify-handle:
         description: |
           위험 경로 게이트가 사람 머지로 넘길 때 담당자로 지정할 GitHub 핸들(예: "octocat").
-          빈 문자열(기본값)이면 지정하지 않는다 — 기존 호출부는 무변화.
+          빈 문자열(기본값)이면 아무것도 하지 않는다 — 기존 호출부는 무변화.
 
-          담당자 지정(assignee)이 주 수단이다: watch 설정으로 끌 수 없는 유일한 알림 경로라서다
-          (이슈 #46 참고 — 코멘트·리뷰 알림은 사용자가 끌 수 있어 실제로 안 닿은 사례가 있었다).
-          리뷰어 지정도 함께 요청한다 — 실패해도 무시한다(이미 리뷰어인 경우 등).
+          **여기서는 담당자를 붙이지 않는다(#55).** 예전엔 이 게이트가 위험 경로를 감지한
+          바로 그 순간(리뷰가 아직 도는 중) 담당자를 붙여서, 알림이 "버튼이 활성화되기
+          전"에 도착했다(실측: 위험 경로 감지 직후 담당자 지정 → `review`는 2분 29초를
+          더 돎). 담당자 지정은 `mergeStateStatus == CLEAN`(버튼 활성화)을 판정할 수 있는
+          `claude-review.yml`의 `notify-handle` 입력이 대신 맡는다 — 두 호출부에 같은
+          값을 넘긴다.
+
+          이 입력이 여기서 하는 일은 딱 하나: **이미 담당자로 붙어 있으면 뗀다.** 초록
+          이었다가 새 커밋이 와서 다시 위험 경로로 판정되면, "지금 눌러도 된다"가 다시
+          거짓이 되기 때문이다. 담당자 해제는 알림을 만들지 않아 무해하고, 체크가 다시
+          초록이 되면 `claude-review.yml` 쪽이 다시 붙이며 알림이 간다.
         type: string
         default: ""
 
@@ -127,12 +135,14 @@ jobs:
 
             gh pr edit "$PR" --repo "$REPO" --add-label do-not-merge || true
 
-            # 담당자 지정이 주 수단이다 — watch 설정으로 끌 수 없는 유일한 알림 경로.
-            # 리뷰어 지정은 보강("Review requested" 목록 + review_requested 알림 reason).
-            # 둘 다 synchronize마다 재실행되지만 이미 지정돼 있으면 그냥 실패하니 || true로 흘린다.
+            # 담당자는 여기서 붙이지 않는다(#55) — 체크가 아직 도는 중일 수 있어 "지금
+            # 눌러도 된다"가 거짓인 채로 알림이 갈 수 있다. 대신 이전 push로 이미 붙어
+            # 있으면 뗀다: 그때는 초록이었지만 이번 push로 다시 위험 경로가 됐으니 그
+            # 불변식이 다시 거짓이다. 해제는 알림을 만들지 않아 무해하고, 다시 초록이
+            # 되면 `claude-review.yml`이 다시 붙이며 알림이 간다.
             if [ -n "$NOTIFY_HANDLE" ]; then
-              gh pr edit "$PR" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" || true
-              gh pr edit "$PR" --repo "$REPO" --add-reviewer "$NOTIFY_HANDLE" || true
+              gh pr edit "$PR" --repo "$REPO" --remove-assignee "$NOTIFY_HANDLE" 2>/dev/null || true
+              gh pr edit "$PR" --repo "$REPO" --remove-reviewer "$NOTIFY_HANDLE" 2>/dev/null || true
             fi
 
             # 같은 마커가 이미 있으면 다시 달지 않는다(push마다 재실행되므로).
