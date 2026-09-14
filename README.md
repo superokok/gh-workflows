@@ -363,6 +363,17 @@ jobs:
 - **재사용 워크플로우에서 `uses: ./...`(로컬 composite action)은 쓸 수 없다.** 그 경로는
   **호출부 저장소**를 가리키므로 다른 프로젝트에서 부르면 깨진다. 공유하고 싶은 짧은 로직은
   각 워크플로우에 인라인으로 둔다(`skip-paths-regex` 판정이 그래서 두 곳에 같이 있다).
+- **`.github/workflows/*.yml`의 `uses:`가 `.github/actions/...`를 가리키면 `lint-workflows.sh`가
+  빌드를 막는다** — `./.github/actions/...`(위 항목, 호출부 저장소를 가리켜 깨짐)와
+  `owner/repo/.github/actions/...@main`(절대 참조라 그건 피하지만, **도입 PR 자신을
+  검증할 수 없다** — main에 아직 그 액션이 없어서다) 둘 다 막는다. 이 함정이 **세 번**
+  실측으로 확인됐다: PR #59(`notify-assignee-if-clean`)·PR #62(`assign-if-clean`)가
+  `startup_failure`로 죽었고, PR #56이 도입한 `.github/actions/label-with-retry`도
+  같은 형태였다(그때는 그 PR 자체 검증 중에 `agent` 라벨 이벤트가 없어 우연히 안 걸렸을
+  뿐, 잠재적으로 같은 함정이었다 — #61에서 발견해 셸 중복으로 되돌렸다). 주석이나 README만
+  으로는 안 막힌다는 게 두 번의 실측(#59·#62)으로 증명돼서 게이트로 옮겼다. 전면 금지로
+  뒀다 — `workflow_call`이 있는 파일만 막는 방식보다 단순하고, 이 저장소에서만 도는
+  `self-*.yml`도 어차피 로컬 액션을 쓸 이유가 없다(공유 로직은 위 항목대로 인라인).
 - **재사용 워크플로우를 *삭제*할 때는 순서가 반대다.** 추가·수정은 여기를 먼저 고치고 소비
   프로젝트가 따라오면 되지만, 삭제는 소비 프로젝트의 **`main`까지 호출부가 걷힌 뒤**에 해야
   한다. `workflow_run`/`status`/`schedule` 호출부는 default 브랜치 버전이 도는데, 여기서

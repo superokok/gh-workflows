@@ -148,19 +148,33 @@ jobs:
           fi
           echo "next=$next" >> "$GITHUB_OUTPUT"
 
-      # remove-label → add-label 사이는 원자적이지 않다. 두 호출 모두 재시도하는
-      # 이유·백오프 값은 .github/actions/label-with-retry 참고 — after-merge.yml의
-      # drain-queue와 로직을 공유한다(PR #53 리뷰 지적, #54).
+      # remove-label → add-label 사이는 원자적이지 않다. 두 호출 모두 재시도한다 —
+      # after-merge.yml의 drain-queue에 있는 label_with_retry와 같은 로직이다(PR #53
+      # 리뷰 지적, #54). 한때 .github/actions/label-with-retry composite action으로
+      # 공유했으나(PR #56), 재사용 워크플로우가 소비 저장소 워크스페이스에서 도는
+      # 문제와 `@main` 절대 참조가 도입 PR 자신을 검증할 수 없는 문제 둘 다 걸려
+      # startup_failure 함정이었다(#61, lint가 이제 이 형태를 막는다) — 셸 중복으로
+      # 되돌렸다. 로직이 갈라지지 않도록 고칠 때 양쪽 다 같이 본다.
       - name: agent-queued 라벨 제거
         id: remove-queued
         if: steps.plan.outputs.next != ''
-        uses: superokok/gh-workflows/.github/actions/label-with-retry@main
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          repo: ${{ github.repository }}
-          issue: ${{ steps.plan.outputs.next }}
-          label: agent-queued
-          mode: remove
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.plan.outputs.next }}
+        run: |
+          set -euo pipefail
+          n=1; delay=3
+          until gh issue edit "$ISSUE" --repo "$REPO" --remove-label agent-queued; do
+            if [ "$n" -ge 5 ]; then
+              echo "::error::#$ISSUE 라벨 remove 실패 (agent-queued), 5회 모두 소진"
+              exit 1
+            fi
+            echo "라벨 remove 실패 (#$ISSUE → agent-queued), ${delay}초 후 재시도 ($n/5)"
+            sleep "$delay"
+            n=$((n + 1))
+            delay=$((delay * 2))
+          done
 
       - name: 즉시 착수 안내 댓글
         if: steps.plan.outputs.next != ''
@@ -177,13 +191,23 @@ jobs:
         id: add-agent
         if: steps.plan.outputs.next != ''
         continue-on-error: true
-        uses: superokok/gh-workflows/.github/actions/label-with-retry@main
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          repo: ${{ github.repository }}
-          issue: ${{ steps.plan.outputs.next }}
-          label: agent
-          mode: add
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.plan.outputs.next }}
+        run: |
+          set -euo pipefail
+          n=1; delay=3
+          until gh issue edit "$ISSUE" --repo "$REPO" --add-label agent; do
+            if [ "$n" -ge 5 ]; then
+              echo "::error::#$ISSUE 라벨 add 실패 (agent), 5회 모두 소진"
+              exit 1
+            fi
+            echo "라벨 add 실패 (#$ISSUE → agent), ${delay}초 후 재시도 ($n/5)"
+            sleep "$delay"
+            n=$((n + 1))
+            delay=$((delay * 2))
+          done
 
       - name: 부착 실패 시 agent-queued로 되돌림
         if: steps.plan.outputs.next != '' && steps.add-agent.outcome == 'failure'

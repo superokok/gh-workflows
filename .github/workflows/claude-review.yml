@@ -377,9 +377,14 @@ jobs:
           fi
 
           # mergeStateStatus는 비동기라 방금 끝난 체크가 아직 반영 안 됐을 수 있다(UNKNOWN).
-          # 15초 간격으로 최대 90초 재확인한다 — 이 job은 리뷰로 이미 과금됐으므로 여기서
-          # 기다리는 건 추가 비용이 없다.
-          for i in 1 2 3 4 5 6; do
+          # RETRY_COUNT회 시도하며 그 사이 RETRY_INTERVAL_SEC초씩 대기한다(마지막 시도
+          # 뒤에는 대기하지 않으므로 실제 총 대기 시간은 (RETRY_COUNT-1)*RETRY_INTERVAL_SEC).
+          # 숫자를 주석에 직접 적으면 값을 바꿀 때 주석과 실제 동작이 따로 논다 — #61이
+          # 바로 그 사례였다(주석은 "90초"인데 반복 6회·간격 15초라 실제로는 75초만 돎).
+          # 이 job은 리뷰로 이미 과금됐으므로 여기서 기다리는 건 추가 비용이 없다.
+          RETRY_COUNT=7
+          RETRY_INTERVAL_SEC=15
+          for i in $(seq 1 "$RETRY_COUNT"); do
             info=$(gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus,labels,assignees 2>/dev/null)
             mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
             status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
@@ -421,11 +426,12 @@ jobs:
               fi
             fi
 
-            echo "아직 판정 불가 (mergeable=$mergeable, status=$status, 시도 $i/6)"
-            [ "$i" -lt 6 ] && sleep 15
+            echo "아직 판정 불가 (mergeable=$mergeable, status=$status, 시도 $i/$RETRY_COUNT)"
+            [ "$i" -lt "$RETRY_COUNT" ] && sleep "$RETRY_INTERVAL_SEC"
           done
 
-          echo "90초 내 CLEAN도 빨간불도 확정되지 않음 — notify-ready(폴백)가 다시 판정한다"
+          TOTAL_WAIT_SEC=$(( (RETRY_COUNT - 1) * RETRY_INTERVAL_SEC ))
+          echo "${TOTAL_WAIT_SEC}초 내 CLEAN도 빨간불도 확정되지 않음 — notify-ready(폴백)가 다시 판정한다"
           exit 0
 
   # ── 폴백: CI가 리뷰보다 늦게 끝나거나 review 자신이 죽은 PR을 위한 판정 job (#55·#60) ──

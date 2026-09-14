@@ -237,12 +237,14 @@ jobs:
           # 라벨로 되돌리며 시끄럽게 알린다(remove는 되돌릴 "직전 상태"가 모호해서
           # 그 처리까지는 하지 않는다).
           #
-          # .github/actions/label-with-retry에 같은 로직이 composite action으로도
-          # 있다(claude-agent.yml의 wake-if-idle이 씀, PR #53 리뷰 지적 #54) — 이 스텝은
-          # 여러 단계를 하나로 합쳐 `id: drain-queue`의 outcome 하나로 노출하고 있어서
-          # (아래 "정리 결과 요약" 스텝, PR #24 리뷰 지적 #26) 그 action을 쓰려면 다시
-          # 여러 스텝으로 쪼개야 한다 — 여기서는 하지 않는다. 로직이 갈라지지 않도록
-          # 고칠 때 양쪽 다 같이 본다.
+          # claude-agent.yml의 wake-if-idle에도 같은 로직이 있다(PR #53 리뷰 지적 #54).
+          # 한때 .github/actions/label-with-retry composite action으로 공유했으나(PR
+          # #56), 재사용 워크플로우가 소비 저장소 워크스페이스에서 도는 문제로
+          # startup_failure 함정이었다(#61, lint가 이제 로컬 액션 참조를 막는다) — 셸
+          # 중복으로 되돌렸다. 이 스텝은 애초에 composite action을 쓰지 않았다: 여러
+          # 단계를 하나로 합쳐 `id: drain-queue`의 outcome 하나로 노출하고 있어서(아래
+          # "정리 결과 요약" 스텝, PR #24 리뷰 지적 #26) action을 쓰려면 다시 여러
+          # 스텝으로 쪼개야 했다. 로직이 갈라지지 않도록 고칠 때 양쪽 다 같이 본다.
           label_with_retry() {
             local mode="$1" issue="$2" label="$3" attempts=5 delay=3 n=1
             local flag

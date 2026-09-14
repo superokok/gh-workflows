@@ -22,3 +22,20 @@ if [ ! -x ./actionlint ]; then
 fi
 
 ./actionlint -color
+
+# 로컬 composite action(`.github/actions/...`) 참조를 금지한다 — `./.github/actions/...`
+# 형태와 `owner/repo/.github/actions/...@ref` 형태 둘 다. 재사용 워크플로우는 소비 저장소
+# 워크스페이스에서 실행되므로 `./` 참조는 해석할 수 없고, `@main` 절대 참조는 도입 PR
+# 자신을 검증할 수 없다(main에 아직 없다). 둘 다 실측으로 startup_failure를 냈다
+# (PR #59 notify-assignee-if-clean, PR #62 assign-if-clean, 그리고 뒤늦게 발견된
+# PR #56의 label-with-retry — 셋 다 같은 함정). 셸 중복을 감수한다.
+bad_action_refs=""
+for f in .github/workflows/*.yml; do
+  match=$(sed -E 's/#.*$//' "$f" | grep -n 'uses:.*\.github/actions/' | sed "s#^#$f:#") || true
+  [ -n "$match" ] && bad_action_refs="${bad_action_refs}${match}"$'\n'
+done
+if [ -n "$bad_action_refs" ]; then
+  echo "::error::재사용 워크플로우는 소비 저장소 워크스페이스에서 실행되므로 로컬 액션을 해석할 수 없다. @main 절대 참조는 도입 PR에서 검증 불가. 셸 중복을 감수한다. (PR #59·#62)"
+  printf '%s\n' "$bad_action_refs"
+  exit 1
+fi
