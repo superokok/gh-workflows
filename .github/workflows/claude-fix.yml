@@ -20,11 +20,22 @@ on:
       node-version:
         type: string
         default: "22"
+      java-version:
+        description: JVM 빌드가 있는 프로젝트만 넘긴다 (예 "21"). 빈 문자열이면 건너뜀
+        type: string
+        default: ""
+      java-distribution:
+        description: setup-java의 distribution. java-version이 빈 문자열이면 무시된다
+        type: string
+        default: "temurin"
       # claude-agent.yml·check.yml과 같은 규칙: **커맨드 문자열 입력이고, 빈 문자열이면
       # 그 단계를 건너뛴다.** 여기만 하드코딩으로 남아 있었다 — Node + Prisma가 아닌
       # 저장소에서는 에이전트가 시작조차 못 하고 죽는다(devDepth에서 claude-agent가
       # 정확히 그렇게 죽었다: prisma가 없으니 `npx`가 최신 rc를 받아왔고 거기엔
       # `generate`가 없어 exit 2). 기본값은 지금 동작 그대로라 기존 호출부는 무변화다.
+      # setup-node는 (claude-agent.yml과 같은 이유로) `node-version`이 아니라 `install`로
+      # 껐다 켠다 — install → prepare → verify가 순차 파이프라인이라 Node 셋업만 따로
+      # 끊으면 어중간한 상태가 남는다. setup-java는 그 파이프라인과 무관하게 독립적이다.
       install:
         description: 의존성 설치. 빈 문자열이면 Node 셋업까지 통째로 건너뜀 (YAML만 있는 저장소)
         type: string
@@ -156,6 +167,13 @@ jobs:
           # workflow 스코프 PAT (docs/adr/0007 "알려진 제약").
           token: ${{ steps.app-token.outputs.token }}
 
+      - name: Setup JDK
+        if: steps.target.outputs.run == 'true' && inputs.java-version != ''
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+          cache: gradle
       - uses: actions/setup-node@v4
         if: steps.target.outputs.run == 'true' && inputs.install != ''
         with:
