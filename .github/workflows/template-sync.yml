@@ -1,0 +1,191 @@
+name: Template sync (reusable)
+
+# 공통 골격 파일(`superokok/project-template`의 `common/**`)을 소비 저장소로 흘려보낸다.
+#
+# 왜 워크플로우인가: 프로세스는 `uses:`로 공유하면 복사본이 안 생기지만, `.claude/hooks/`
+# 같은 파일은 **소비 저장소 워크스페이스에 실제로 있어야** 동작한다. 재사용 워크플로우는
+# 소비 저장소에서 돌기 때문에 로컬 액션 참조조차 해석하지 못한다(PR #59·#62에서
+# startup_failure로 확인, 지금은 `scripts/lint-workflows.sh`가 그 형태를 막는다).
+# 복사가 유일한 수단이고, 복사본은 추적하지 않으면 반드시 드리프트한다 — 실측(2026-09-15):
+# kitchen-tempo와 devDepth의 훅 3종 210줄은 바이트 단위로 같았지만 `session-briefing.sh`는
+# 이미 30줄, `.claude/settings.json`은 8줄 갈라져 있었고, **같은 훅의 테스트가 두 벌**
+# (node 러너 / bash)로 따로 자라고 있었다.
+#
+# 호출부(소비 저장소):
+#
+#   name: Template sync
+#   on:
+#     schedule: [{ cron: "0 0 * * 1" }]
+#     workflow_dispatch:
+#   jobs:
+#     sync:
+#       permissions: { contents: write, pull-requests: write }
+#       uses: superokok/gh-workflows/.github/workflows/template-sync.yml@main
+#       secrets: inherit
+#       with: { base-branch: develop }
+
+on:
+  workflow_call:
+    inputs:
+      base-branch:
+        description: PR의 base. 통합 브랜치가 없으면 "main"
+        type: string
+        default: "develop"
+      template-repo:
+        description: 골격 정본 저장소
+        type: string
+        default: "superokok/project-template"
+      template-ref:
+        description: 정본의 ref. 고정하고 싶으면 태그를 넘긴다
+        type: string
+        default: "main"
+      sync-branch:
+        description: |
+          동기화 PR의 브랜치 이름. **고정값이다** — 매번 새 브랜치를 만들면 드리프트 하나당
+          PR이 하나씩 쌓이고, 열린 PR은 WIP 제한에 걸려 에이전트 큐를 멈춘다.
+          같은 브랜치에 밀어 넣으면 열려 있던 PR이 그대로 갱신된다.
+        type: string
+        default: "chore/template-sync"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    # 같은 저장소에서 동시에 두 번 돌면 같은 브랜치에 서로 다른 트리를 밀어 넣는다.
+    # cancel-in-progress는 켜지 않는다 — push까지 끝낸 뒤 PR을 못 연 상태로 잘릴 수 있다.
+    concurrency:
+      group: template-sync-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      # App 설치 토큰을 쓴다. GITHUB_TOKEN으로 만든 커밋은 다른 워크플로우를 깨우지 않아
+      # 동기화 PR에서 CI가 돌지 않는다 — 검증 없이 훅이 바뀌는 PR이 열리는 셈이다.
+      # 설치가 "All repositories"이므로 정본 저장소(private)도 같은 토큰으로 읽는다.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - name: 소비 저장소 체크아웃
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.base-branch }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: 정본 체크아웃
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.template-repo }}
+          ref: ${{ inputs.template-ref }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: .template-src
+
+      - name: 차이 계산
+        id: diff
+        env:
+          BASE: ${{ inputs.base-branch }}
+        run: |
+          set -euo pipefail
+
+          src=".template-src/common"
+          if [ ! -d "$src" ]; then
+            echo "::error::정본에 common/ 디렉터리가 없다 — 레이아웃이 바뀌었는지 확인할 것"
+            exit 1
+          fi
+
+          # `common/` 아래 경로가 그대로 저장소 루트로 간다. 매니페스트를 두지 않는 건
+          # 목록과 실제가 갈라지지 않게 하기 위함이다 — 경로가 곧 목록이다.
+          #
+          # **덮어쓰기만 한다. 지우지 않는다.** 정본에서 파일이 빠졌다고 소비 저장소에서
+          # 자동으로 지우면, 그 저장소가 그 파일에 의존하고 있을 때 자동화가 조용히 기능을
+          # 없앤다. 제거는 사람이 판단할 일이라 PR 본문에만 적는다.
+          (cd "$src" && find . -type f -print0) | while IFS= read -r -d '' f; do
+            rel="${f#./}"
+            mkdir -p "$(dirname "$rel")"
+            cp "$src/$rel" "$rel"
+          done
+
+          # 실행 비트는 복사로 보존되지 않을 수 있다. 훅은 실행 가능해야 한다.
+          chmod +x .claude/hooks/*.sh .claude/hooks/lib/*.sh 2>/dev/null || true
+          chmod +x scripts/hooks/*.sh 2>/dev/null || true
+          git update-index -q --refresh || true
+
+          # 정본 체크아웃은 작업 트리 안(.template-src)에 있어 untracked로 잡힌다.
+          # 제외하지 않으면 **매주 "변경 있음"으로 판정**해 빈 PR을 연다.
+          echo '/.template-src/' >> .git/info/exclude
+
+          changed=$(git status --porcelain)
+          if [ -z "$changed" ]; then
+            echo "정본과 같다 — 열 PR이 없다"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "변경된 파일:"
+          printf '%s\n' "$changed"
+          {
+            echo 'files<<TEMPLATE_SYNC_EOF'
+            printf '%s\n' "$changed"
+            echo 'TEMPLATE_SYNC_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 브랜치 push · PR 생성/갱신
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ inputs.base-branch }}
+          BR: ${{ inputs.sync-branch }}
+          TEMPLATE_REPO: ${{ inputs.template-repo }}
+          TEMPLATE_REF: ${{ inputs.template-ref }}
+          FILES: ${{ steps.diff.outputs.files }}
+        run: |
+          set -euo pipefail
+
+          template_sha=$(git -C .template-src rev-parse --short HEAD)
+          # 작업 트리에 정본을 체크아웃해 둔 채로 커밋하면 그것까지 들어간다.
+          rm -rf .template-src
+
+          git config user.name  "superokok-agent-ops[bot]"
+          git config user.email "superokok-agent-ops[bot]@users.noreply.github.com"
+          git checkout -q -B "$BR"
+          git add -A
+          git commit -q -m "chore: 공통 골격을 정본에 맞춘다 (${TEMPLATE_REPO}@${template_sha})"
+
+          # 같은 브랜치를 계속 쓴다. 이미 열린 PR이 있으면 그게 갱신되고, 없으면 새로 연다.
+          #
+          # 브랜치는 매번 base에서 다시 만들므로 이전 동기화 커밋과 fast-forward 관계가
+          # 아니다 — 그냥 push하면 두 번째 실행부터 non-fast-forward로 죽는다. 그래서
+          # force로 민다. 다만 **사람이 그 위에 얹은 커밋은 절대 덮지 않는다**: 리뷰 중에
+          # 고친 수정이 조용히 사라지면 자동화가 사람 일을 지우는 셈이다.
+          git fetch -q origin "$BR" || true
+          if git rev-parse -q --verify "origin/$BR" >/dev/null; then
+            foreign=$(git log --format='%s' "origin/$BR" --not "origin/$BASE"                         | grep -cv '^chore: 공통 골격을 정본에 맞춘다' || true)
+            if [ "$foreign" != "0" ]; then
+              echo "::error title=동기화 브랜치에 사람 커밋이 있다::${BR}에 이 잡이 만들지 않은 커밋 ${foreign}개가 있어 덮어쓰지 않는다. 열린 동기화 PR을 머지하거나 닫고 브랜치를 지운 뒤 다시 돌려달라."
+              exit 1
+            fi
+          fi
+          git push --force-with-lease origin "$BR"
+
+          existing=$(gh pr list --repo "$REPO" --head "$BR" --state open --json number --jq '(.[0].number // empty)')
+          if [ -n "$existing" ]; then
+            echo "PR #$existing 갱신됨 — 새로 열지 않는다"
+            exit 0
+          fi
+
+          {
+            printf '%s\n\n' "정본 \`${TEMPLATE_REPO}@${template_sha}\`(ref: \`${TEMPLATE_REF}\`)의 \`common/\`을 이 저장소에 반영한다."
+            printf '%s\n\n' '이 PR은 `template-sync.yml`이 자동으로 열었다. **내용은 정본에서 온 그대로이고, 이 저장소에서 수정하면 다음 동기화 때 다시 덮인다** — 고칠 것이 있으면 정본 저장소에 PR을 낸다.'
+            printf '%s\n```\n%s\n```\n\n' '### 변경된 파일' "$FILES"
+            printf '%s\n' '### 확인할 것'
+            printf '%s\n' '- `.claude/hooks/`는 위험 경로다 — 훅이 약해지지 않았는지 diff를 본다.'
+            printf '%s\n' '- 동기화는 **덮어쓰기만** 한다. 정본에서 삭제된 파일은 여기 남아 있으니 필요하면 직접 지운다.'
+          } | gh pr create --repo "$REPO" --base "$BASE" --head "$BR" \
+                --title "chore: 공통 골격 동기화 (${TEMPLATE_REPO}@${template_sha})" \
+                --body-file -
