@@ -31,10 +31,14 @@ on:
         description: PR의 base. 통합 브랜치가 없으면 "main"
         type: string
         default: "develop"
-      template-repo:
-        description: 골격 정본 저장소
+      template-repo-name:
+        description: |
+          골격 정본 저장소의 **이름만**(소유자는 소비 저장소와 같다고 본다).
+          `owner/repo` 전체 이름을 받지 않는 이유: App 토큰을 그 저장소까지 넓히려면
+          `repositories:`에 이름을 따로 넘겨야 하는데 GitHub 표현식에는 split()이 없어
+          전체 이름에서 이름만 뽑아낼 수 없다.
         type: string
-        default: "superokok/project-template"
+        default: "project-template"
       template-ref:
         description: 정본의 ref. 고정하고 싶으면 태그를 넘긴다
         type: string
@@ -62,12 +66,31 @@ jobs:
     steps:
       # App 설치 토큰을 쓴다. GITHUB_TOKEN으로 만든 커밋은 다른 워크플로우를 깨우지 않아
       # 동기화 PR에서 CI가 돌지 않는다 — 검증 없이 훅이 바뀌는 PR이 열리는 셈이다.
-      # 설치가 "All repositories"이므로 정본 저장소(private)도 같은 토큰으로 읽는다.
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      # **정본은 다른 저장소라 토큰을 따로 받는다.** 위 토큰은 `owner`/`repositories`가
+      # 없으면 **이 저장소에만** 유효해서 정본 체크아웃이 404로 죽는다(2026-09-15 실측:
+      # "Inputs 'owner' and 'repositories' are not set. Creating token for this
+      # repository (superokok/devDepth)" 직후 실패).
+      #
+      # 한 토큰에 `owner:`만 줘서 설치된 저장소 전부로 넓히는 방법도 있지만, 그러면 모든
+      # 소비 저장소의 동기화 잡이 **소유자의 모든 저장소에 쓰기 권한**을 쥔다. 읽기 전용으로
+      # 정본 하나만 집는 토큰을 따로 받는 편이 좁다.
+      #
+      # 저장소 **이름**을 입력으로 받는 것도 이 때문이다 — `repositories:`에는 이름만
+      # 넘겨야 하는데 GitHub 표현식에 split()이 없어 `owner/repo`에서 잘라낼 수 없다.
+      - uses: actions/create-github-app-token@v3
+        id: template-token
+        with:
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.template-repo-name }}
+          permission-contents: read
 
       - name: 소비 저장소 체크아웃
         uses: actions/checkout@v7
@@ -79,9 +102,9 @@ jobs:
       - name: 정본 체크아웃
         uses: actions/checkout@v7
         with:
-          repository: ${{ inputs.template-repo }}
+          repository: ${{ github.repository_owner }}/${{ inputs.template-repo-name }}
           ref: ${{ inputs.template-ref }}
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.template-token.outputs.token }}
           path: .template-src
 
       - name: 차이 계산
@@ -141,7 +164,7 @@ jobs:
           REPO: ${{ github.repository }}
           BASE: ${{ inputs.base-branch }}
           BR: ${{ inputs.sync-branch }}
-          TEMPLATE_REPO: ${{ inputs.template-repo }}
+          TEMPLATE_REPO: ${{ github.repository_owner }}/${{ inputs.template-repo-name }}
           TEMPLATE_REF: ${{ inputs.template-ref }}
           FILES: ${{ steps.diff.outputs.files }}
         run: |
