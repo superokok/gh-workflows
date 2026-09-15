@@ -462,6 +462,11 @@ jobs:
   이슈가 깨어날 수 없게 됐다). 그래서 `claude-review`·`enable-auto-merge`·`claude-fix`는
   `github.actor != 'dependabot[bot]'`로 **깨어나지 않는다** — job 수준 `if:`라 check-run은
   `skipped`로 생성되고 필수 체크는 그걸 success로 본다.
+  **예외는 `claude-review.yml`의 `notify-ready` 하나다.** 그 job은 `workflow_run` 트리거라
+  default 브랜치 컨텍스트에서 저장소의 정상 시크릿을 들고 돌아, Dependabot PR에서도 App
+  토큰을 받는다. 그래서 거기엔 actor 필터를 걸지 않는다 — 걸어두면 Dependabot PR이 빨간불이든
+  초록이든 **아무도 안 불린다**(2026-09-15 devDepth #36·#37·#38 실측). 리뷰와 자동 수정은
+  여전히 건너뛰고, **사람을 부르는 것만** 한다.
   대안은 Dependabot secrets에 같은 값을 복제하는 것인데, **에이전트 App 토큰(write)을
   Dependabot 컨텍스트까지 넓히는** 일이라 택하지 않았다. 의존성 PR은 거의 전부 공급망
   위험 경로라 어차피 사람이 diff를 보고 머지한다 — 잃는 건 AI 리뷰 한 겹이고, 사람 게이트는

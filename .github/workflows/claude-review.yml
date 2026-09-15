@@ -468,12 +468,20 @@ jobs:
   # 안 넣으면 CI 실패는 잡아도 리뷰 자신의 startup_failure는 아무도 감지하지 못한다.
   # 그 파일은 **default 브랜치에 있는 버전이 돈다** — 새로 추가한 직후에는 release 전까지
   # 효력이 없다.
+  #
+  # **이 job에는 `github.actor != 'dependabot[bot]'`를 걸지 않는다.** `review` job의 그 필터는
+  # 기술적 제약이다 — Dependabot이 낸 `pull_request` 실행에는 Dependabot secrets만 들어와
+  # `create-github-app-token`부터 실패한다. 이 job은 **`workflow_run` 트리거**라 default
+  # 브랜치 컨텍스트에서 **저장소의 정상 시크릿**을 들고 돈다(GitHub이 Dependabot PR을 다루라고
+  # 안내하는 바로 그 경로다). 같은 필터를 여기에도 복사해 두면 얻는 것 없이 알림만 사라진다:
+  # 2026-09-15 devDepth #36·#38이 빨간불인 채로, #37이 초록인 채로 담당자 없이 서 있었고
+  # `Claude Review | workflow_run`은 매번 skipped로 끝났다. 의존성 PR은 거의 전부 공급망
+  # 위험 경로라 **사람이 반드시 봐야 하는데**, 그 사람을 부르는 경로가 이것 하나뿐이다.
   notify-ready:
     if: >-
       inputs.notify-handle != '' &&
       github.event_name == 'workflow_run' &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.actor != 'dependabot[bot]'
+      github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -522,14 +530,22 @@ jobs:
             fi
           }
 
-          info=$(gh pr view "$num" --repo "$REPO" --json mergeable,mergeStateStatus,labels,assignees 2>/dev/null)
+          info=$(gh pr view "$num" --repo "$REPO" --json mergeable,mergeStateStatus,labels,assignees,author 2>/dev/null)
           mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
           status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
           has_dnm=$(printf '%s' "$info" | jq -r '[.labels[].name] | any(. == "do-not-merge")' 2>/dev/null)
           already_assigned=$(printf '%s' "$info" | jq -r --arg h "$NOTIFY_HANDLE" '[.assignees[].login] | any(. == $h)' 2>/dev/null)
+          is_dependabot=$(printf '%s' "$info" | jq -r '.author.login == "dependabot[bot]"' 2>/dev/null)
 
           if [ "$mergeable" = "MERGEABLE" ] && [ "$status" = "CLEAN" ]; then
-            if [ "$has_dnm" != "true" ]; then echo "do-not-merge 아님 — 스킵"; exit 0; fi
+            # 보통은 `do-not-merge`가 "사람이 봐야 한다"는 표식이다. Dependabot PR에는 그게
+            # 안 붙는다 — `enable-auto-merge`의 `decide`가 같은 시크릿 제약으로 스킵되기
+            # 때문이다. 그렇다고 알림을 건너뛰면 **초록인 채 아무도 모르게 열려만 있는다**
+            # (devDepth #37 실측). 의존성 PR은 정의상 공급망 위험 경로이고 auto-merge도
+            # 안 켜져 있으므로, 표식이 없어도 사람 머지가 확정이다.
+            if [ "$has_dnm" != "true" ] && [ "$is_dependabot" != "true" ]; then
+              echo "do-not-merge 아님 — 스킵"; exit 0
+            fi
             if [ "$already_assigned" = "true" ]; then
               echo "이미 담당자 — 스킵(멱등, 주 경로가 이미 처리한 흔한 경우)"; exit 0
             fi
