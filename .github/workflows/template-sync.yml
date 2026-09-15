@@ -126,15 +126,18 @@ jobs:
           # **덮어쓰기만 한다. 지우지 않는다.** 정본에서 파일이 빠졌다고 소비 저장소에서
           # 자동으로 지우면, 그 저장소가 그 파일에 의존하고 있을 때 자동화가 조용히 기능을
           # 없앤다. 제거는 사람이 판단할 일이라 PR 본문에만 적는다.
+          # `-p`로 모드를 그대로 가져온다. 파일 권한도 정본이 정한다.
+          #
+          # 예전엔 복사 뒤 `chmod +x`를 글롭으로 걸었는데, 그 글롭이 **정본이 소유하지도
+          # 않는 파일까지** 건드렸다(2026-09-15 devDepth #40 실측: `session-briefing.sh`를
+          # 포함해 6개가 644→755 모드 변경만으로 diff에 들어왔다). 동기화는 정본이 가진
+          # 것만 바꿔야 한다 — 실행 비트가 필요하면 정본 저장소에서 올린다.
           (cd "$src" && find . -type f -print0) | while IFS= read -r -d '' f; do
             rel="${f#./}"
             mkdir -p "$(dirname "$rel")"
-            cp "$src/$rel" "$rel"
+            cp -p "$src/$rel" "$rel"
           done
 
-          # 실행 비트는 복사로 보존되지 않을 수 있다. 훅은 실행 가능해야 한다.
-          chmod +x .claude/hooks/*.sh .claude/hooks/lib/*.sh 2>/dev/null || true
-          chmod +x scripts/hooks/*.sh 2>/dev/null || true
           git update-index -q --refresh || true
 
           # 정본 체크아웃은 작업 트리 안(.template-src)에 있어 untracked로 잡힌다.
