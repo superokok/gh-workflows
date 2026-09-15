@@ -153,8 +153,16 @@ jobs:
 
           if [ "$tries" -ge 2 ]; then
             gh pr edit "$num" --repo "$REPO" --add-label do-not-merge || true
+            # 지정 실패를 삼키되 흔적은 남긴다(#51). 담당자 지정은 watch 설정으로 끌 수 없는
+            # 유일한 알림 경로라, 조용히 실패하면 자동 수정을 포기한 PR이 아무도 모르는 채
+            # 방치된다. job을 세우지는 않는다 — 바로 뒤의 "포기" 코멘트가 남은 알림이다.
             if [ -n "$NOTIFY_HANDLE" ]; then
-              gh pr edit "$num" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" || true
+              if ! assign_err=$(gh pr edit "$num" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>&1); then
+                echo "::warning title=담당자 지정 실패::PR #${num}에 @${NOTIFY_HANDLE} 담당자 지정 실패 — 자동 수정 포기 알림이 사람에게 닿지 않았을 수 있다: ${assign_err}"
+                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                  printf '⚠️ PR #%s 담당자 지정 실패(`@%s`): %s\n' "$num" "$NOTIFY_HANDLE" "$assign_err" >> "$GITHUB_STEP_SUMMARY"
+                fi
+              fi
             fi
             if ! gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' \
                  | grep -qF '<!-- claude-fix:gave-up -->'; then
