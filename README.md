@@ -280,6 +280,37 @@ jobs:
 | `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["CI", "Preview Smoke"], types: [completed]}` + `status:`. `base-branch` 입력(기본값 `"develop"`)을 통합 브랜치에 맞게 넘긴다 — 안 넘기면 `base=main`인 저장소에서는 대상 PR을 영원히 못 찾는다(#60) |
 | `preview-smoke.yml` | `preview-smoke.yml@main` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
 | `release-pr.yml` | `release-pr.yml@main` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
+| `template-sync.yml` | `template-sync.yml@main` | `schedule:` (주 1회 권장) + `workflow_dispatch:`. 입력 `base-branch`(PR의 base), `template-repo`(기본 `superokok/project-template`), `template-ref`, `sync-branch` |
+
+### `template-sync.yml` — 공통 골격 파일 동기화
+
+프로세스는 `uses:`로 공유하면 복사본이 안 생긴다. 그런데 **`.claude/hooks/` 같은 파일은
+소비 저장소 워크스페이스에 실제로 있어야 동작한다** — 재사용 워크플로우는 소비 저장소에서
+돌기 때문에 로컬 액션 참조조차 해석하지 못한다(PR #59·#62). 즉 이 층은 복사가 유일한
+수단이고, **복사본은 추적하지 않으면 반드시 드리프트한다.**
+
+실측(2026-09-15, 양쪽 `develop`): kitchen-tempo와 devDepth의 훅 3종 210줄은 바이트 단위로
+같았지만 `session-briefing.sh`는 30줄, `.claude/settings.json`은 8줄 갈라져 있었고,
+**같은 훅의 회귀 테스트가 두 벌**(node 러너 126줄 / bash 스위트)로 따로 자라고 있었다.
+
+정본은 [`superokok/project-template`](https://github.com/superokok/project-template)이고,
+그 저장소의 `common/` 아래 경로가 **그대로 소비 저장소 루트로** 간다. 매니페스트는 두지
+않는다 — 경로가 곧 목록이다.
+
+동작:
+- 드리프트가 없으면 조용히 끝난다(빈 PR을 열지 않는다).
+- 있으면 고정 브랜치(`chore/template-sync`)에 밀고 PR을 연다. **이미 열린 PR이 있으면
+  그 PR을 갱신**한다 — 매번 새 브랜치를 만들면 드리프트 하나당 PR이 쌓이고, 열린 PR은
+  WIP 제한에 걸려 에이전트 큐를 멈춘다.
+- **덮어쓰기만 하고 지우지 않는다.** 정본에서 파일이 빠졌다고 자동으로 지우면, 그 파일에
+  의존하던 저장소에서 자동화가 조용히 기능을 없앤다. 제거는 PR 본문에 적고 사람이 판단한다.
+- 동기화 브랜치에 사람이 얹은 커밋이 있으면 **덮지 않고 잡을 실패시킨다**(리뷰 중 수정이
+  자동으로 사라지지 않게).
+- 커밋은 App 토큰으로 만든다 — `GITHUB_TOKEN`으로 만든 커밋은 다른 워크플로우를 깨우지
+  않아 동기화 PR에서 CI가 안 돈다. 검증 없이 훅이 바뀌는 PR이 열리는 셈이 된다.
+
+`.claude/hooks/`는 소비 저장소에서 위험 경로라 이 PR은 사람이 머지한다. 훅이 조용히 바뀌지
+않는다는 뜻이고, 의도한 동작이다.
 
 > **릴리스 PR은 `after-merge.yml`이 같은 잡의 스텝으로 만든다.** 예전엔 `push: <통합 브랜치>`로
 > 도는 별도 워크플로우였는데, 그 push는 **거의 항상 `after-merge`를 깨우는 PR 머지와 같은
