@@ -34,6 +34,11 @@ jobs:
     with:
       # 운영 브랜치. 비워두면 릴리스 PR 스텝 자체가 안 돈다(통합 브랜치가 없는 저장소용
       # 기본값이다) — 이 저장소는 develop→main이 있으므로 반드시 넘긴다.
+      # **명시적으로 넘긴다.** 재사용 워크플로우의 기본값은 `develop`이라, 통합 브랜치가
+      # 다른 저장소에서 이걸 빼면 모든 게이트 job의 `if`가 거짓이 되어 **전부 skipped**로
+      # 조용히 죽는다 — PR은 CLEAN으로 보이지만 게이트가 통과한 게 아니라 안 돈 것이다
+      # (2026-09-16 project-template #5 실측).
+      base-branch: {{INTEGRATION_BRANCH}}
       release-target: {{PRODUCTION_BRANCH}}
       # 이 머지로 **충돌하게 된 다른 PR**에 담당자를 지정한다. 충돌은 실패 체크를 만들지
       # 않아서 auto-merge가 조용히 멈추기만 하고 아무도 안 불린다(gh-workflows #74).

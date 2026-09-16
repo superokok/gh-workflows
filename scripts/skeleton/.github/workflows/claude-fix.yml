@@ -36,6 +36,11 @@ jobs:
     with:
       # 담당자 지정 — 코멘트·리뷰 알림은 설정에서 끌 수 있고(gh-workflows #46 실측)
       # 실제로 닿지 않았다. 담당자 지정은 끌 수 없는 유일한 경로다.
+      # **명시적으로 넘긴다.** 재사용 워크플로우의 기본값은 `develop`이라, 통합 브랜치가
+      # 다른 저장소에서 이걸 빼면 모든 게이트 job의 `if`가 거짓이 되어 **전부 skipped**로
+      # 조용히 죽는다 — PR은 CLEAN으로 보이지만 게이트가 통과한 게 아니라 안 돈 것이다
+      # (2026-09-16 project-template #5 실측).
+      base-branch: {{INTEGRATION_BRANCH}}
       notify-handle: {{NOTIFY_HANDLE}}
       # JVM 스택이면 빌드 파일의 toolchain과 맞춘다(아니면 비운다). claude-agent.yml과 같은 이유(#26).
       java-version: "{{JAVA_VERSION}}"
