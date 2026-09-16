@@ -31,10 +31,14 @@ on:
         description: PR의 base. 통합 브랜치가 없으면 "main"
         type: string
         default: "develop"
-      template-repo:
-        description: 골격 정본 저장소
+      template-repo-name:
+        description: |
+          골격 정본 저장소의 **이름만**(소유자는 소비 저장소와 같다고 본다).
+          `owner/repo` 전체 이름을 받지 않는 이유: App 토큰을 그 저장소까지 넓히려면
+          `repositories:`에 이름을 따로 넘겨야 하는데 GitHub 표현식에는 split()이 없어
+          전체 이름에서 이름만 뽑아낼 수 없다.
         type: string
-        default: "superokok/project-template"
+        default: "project-template"
       template-ref:
         description: 정본의 ref. 고정하고 싶으면 태그를 넘긴다
         type: string
@@ -62,12 +66,31 @@ jobs:
     steps:
       # App 설치 토큰을 쓴다. GITHUB_TOKEN으로 만든 커밋은 다른 워크플로우를 깨우지 않아
       # 동기화 PR에서 CI가 돌지 않는다 — 검증 없이 훅이 바뀌는 PR이 열리는 셈이다.
-      # 설치가 "All repositories"이므로 정본 저장소(private)도 같은 토큰으로 읽는다.
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      # **정본은 다른 저장소라 토큰을 따로 받는다.** 위 토큰은 `owner`/`repositories`가
+      # 없으면 **이 저장소에만** 유효해서 정본 체크아웃이 404로 죽는다(2026-09-15 실측:
+      # "Inputs 'owner' and 'repositories' are not set. Creating token for this
+      # repository (superokok/devDepth)" 직후 실패).
+      #
+      # 한 토큰에 `owner:`만 줘서 설치된 저장소 전부로 넓히는 방법도 있지만, 그러면 모든
+      # 소비 저장소의 동기화 잡이 **소유자의 모든 저장소에 쓰기 권한**을 쥔다. 읽기 전용으로
+      # 정본 하나만 집는 토큰을 따로 받는 편이 좁다.
+      #
+      # 저장소 **이름**을 입력으로 받는 것도 이 때문이다 — `repositories:`에는 이름만
+      # 넘겨야 하는데 GitHub 표현식에 split()이 없어 `owner/repo`에서 잘라낼 수 없다.
+      - uses: actions/create-github-app-token@v3
+        id: template-token
+        with:
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.template-repo-name }}
+          permission-contents: read
 
       - name: 소비 저장소 체크아웃
         uses: actions/checkout@v7
@@ -79,9 +102,9 @@ jobs:
       - name: 정본 체크아웃
         uses: actions/checkout@v7
         with:
-          repository: ${{ inputs.template-repo }}
+          repository: ${{ github.repository_owner }}/${{ inputs.template-repo-name }}
           ref: ${{ inputs.template-ref }}
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.template-token.outputs.token }}
           path: .template-src
 
       - name: 차이 계산
@@ -101,19 +124,23 @@ jobs:
           # **덮어쓰기만 한다. 지우지 않는다.** 정본에서 파일이 빠졌다고 소비 저장소에서
           # 자동으로 지우면, 그 저장소가 그 파일에 의존하고 있을 때 자동화가 조용히 기능을
           # 없앤다. 제거는 사람이 판단할 일이라 PR 본문에만 적는다.
-          # -type l도 포함한다: 정본에 심볼릭 링크가 생기면 -P로 링크 그 자체를 옮겨
-          # 소비 저장소에도 링크로 남긴다. 안 그러면 조용히 빠지거나(파일만 찾을 때)
-          # cp가 링크를 따라가 타깃 내용으로 뒤바뀐다(-P 없을 때) — 둘 다 드리프트를
-          # 숨긴다.
+          # `-p`로 **모드**를, `-P`로 **심볼릭 링크 자체**를 그대로 가져온다. 내용뿐 아니라
+          # 권한과 링크 여부까지 정본이 정한다.
+          #
+          # `-p`가 필요한 이유: 예전엔 복사 뒤 `chmod +x`를 글롭으로 걸었는데, 그 글롭이
+          # **정본이 소유하지도 않는 파일까지** 건드렸다(2026-09-15 devDepth #40 실측:
+          # `session-briefing.sh`를 포함해 6개가 644→755 모드 변경만으로 diff에 들어왔다).
+          # 동기화는 정본이 가진 것만 바꿔야 한다 — 실행 비트가 필요하면 정본에서 올린다.
+          #
+          # `-type l`·`-P`가 필요한 이유(#72): 정본에 심볼릭 링크가 생기면 링크 그 자체를
+          # 옮겨 소비 저장소에도 링크로 남긴다. 안 그러면 조용히 빠지거나(파일만 찾을 때)
+          # cp가 링크를 따라가 타깃 내용으로 뒤바뀐다 — 둘 다 드리프트를 숨긴다.
           (cd "$src" && find . \( -type f -o -type l \) -print0) | while IFS= read -r -d '' f; do
             rel="${f#./}"
             mkdir -p "$(dirname "$rel")"
-            cp -P "$src/$rel" "$rel"
+            cp -pP "$src/$rel" "$rel"
           done
 
-          # 실행 비트는 복사로 보존되지 않을 수 있다. 훅은 실행 가능해야 한다.
-          chmod +x .claude/hooks/*.sh .claude/hooks/lib/*.sh 2>/dev/null || true
-          chmod +x scripts/hooks/*.sh 2>/dev/null || true
           git update-index -q --refresh || true
 
           # 정본 체크아웃은 작업 트리 안(.template-src)에 있어 untracked로 잡힌다.
@@ -143,7 +170,7 @@ jobs:
           REPO: ${{ github.repository }}
           BASE: ${{ inputs.base-branch }}
           BR: ${{ inputs.sync-branch }}
-          TEMPLATE_REPO: ${{ inputs.template-repo }}
+          TEMPLATE_REPO: ${{ github.repository_owner }}/${{ inputs.template-repo-name }}
           TEMPLATE_REF: ${{ inputs.template-ref }}
           FILES: ${{ steps.diff.outputs.files }}
         run: |
