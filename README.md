@@ -165,7 +165,7 @@ scripts/sync-secrets.sh superokok/new-repo
 ```
 
 **빈 입력은 "그 secret은 건드리지 않음"이다** — 하나만 교체할 때 나머지는 Enter로 넘긴다.
-무인 실행이 필요하면 `AGENT_APP_CLIENT_ID` · `AGENT_APP_PEM`(파일 경로) · `CLAUDE_CODE_OAUTH_TOKEN`을
+무인 실행이 필요하면 `AGENT_APP_CLIENT_ID` · `AGENT_APP_PRIVATE_KEY`(키 **값**, 파일 경로를 주고 싶으면 `AGENT_APP_PEM`) · `CLAUDE_CODE_OAUTH_TOKEN`을
 환경변수로 미리 주면 묻지 않는다.
 
 
