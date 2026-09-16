@@ -41,6 +41,11 @@ jobs:
     with:
       # JVM 스택이면 빌드 파일의 toolchain과 맞춘다(아니면 비운다). gh-workflows #48부터 setup-java를
       # 지원해서, 러너 기본 JDK로 "환경 때문에 못 돎"이 되던 문제가 사라졌다.
+      # **명시적으로 넘긴다.** 재사용 워크플로우의 기본값은 `develop`이라, 통합 브랜치가
+      # 다른 저장소에서 이걸 빼면 모든 게이트 job의 `if`가 거짓이 되어 **전부 skipped**로
+      # 조용히 죽는다 — PR은 CLEAN으로 보이지만 게이트가 통과한 게 아니라 안 돈 것이다
+      # (2026-09-16 project-template #5 실측).
+      base-branch: {{INTEGRATION_BRANCH}}
       java-version: "{{JAVA_VERSION}}"
       # 루트가 npm workspaces(shared/web/app)라 루트 한 번으로 셋 다 설치된다.
       install: "{{INSTALL}}"
