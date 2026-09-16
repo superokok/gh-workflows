@@ -42,6 +42,13 @@ on:
           예전 `push:` 트리거는 안 돌았지만, 이 워크플로우는 그때도 깨어난다.
         type: string
         default: ""
+      notify-handle:
+        description: |
+          충돌하게 된 PR에 담당자로 지정할 GitHub 핸들. 비어 있으면 충돌 알림을 건너뛴다.
+          다른 워크플로우(`enable-auto-merge`·`claude-review`·`claude-fix`)의 같은 이름
+          입력과 **같은 값을 넘긴다** — 한 곳만 빠지면 그 경로의 알림만 조용히 사라진다.
+        type: string
+        default: ""
       pre-merge-note:
         description: |
           릴리스 PR 본문의 "포함된 변경" 목록 앞에 그대로 넣을 마크다운(staging 링크, 머지 방식
@@ -402,6 +409,89 @@ jobs:
             echo "릴리스 PR 생성"
           fi
 
+      # ── 이 머지로 충돌하게 된 PR 부르기 ──────────────────────────────────────
+      # **머지는 다른 PR을 깨뜨리는 사건이다.** 그런데 충돌은 실패 체크를 만들지 않는다 —
+      # `mergeable`이 CONFLICTING이 될 뿐이고 auto-merge는 그냥 안 켜진다. 빨간불도,
+      # 담당자도, 라벨도 없어서 **PR 목록을 직접 열어보기 전엔 아무도 모른다**
+      # (2026-09-16 확인: 이 저장소 어디에도 CONFLICTING을 보는 코드가 없었다).
+      #
+      # WIP 제한 1이 애초에 이 상황을 막지만 그 게이트는 `claude-agent`에만 있다. 사람이
+      # 직접 연 PR은 밖이라 실제로 뚫렸다 — #72(에이전트)가 열려 있는 채 #73(사람)이 같은
+      # 파일을 건드려 충돌했고, 하루 동안 아무 신호도 없었다.
+      #
+      # **자동 리베이스는 하지 않는다.** 리뷰 중인 브랜치를 기계가 다시 쓰면 사람이 고친
+      # 커밋이 조용히 사라질 수 있다. 여기서는 부르기만 한다 — 어느 쪽을 살릴지는 diff를
+      # 본 사람이 정한다.
+      - name: 이 머지로 충돌하게 된 PR에 사람을 부른다
+        id: conflicts
+        if: ${{ !cancelled() && github.event.pull_request.merged == true && inputs.notify-handle != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          MERGED_PR: ${{ github.event.pull_request.number }}
+          NOTIFY_HANDLE: ${{ inputs.notify-handle }}
+        run: |
+          set +e
+          set -o pipefail
+
+          # GitHub은 `mergeable`을 **비동기로** 계산한다. 머지 직후에는 거의 항상 UNKNOWN이고,
+          # 그때 판정하면 충돌을 통째로 놓친다. UNKNOWN이 남아 있는 동안만 다시 물어본다.
+          RETRY_COUNT=6
+          RETRY_INTERVAL_SEC=10
+          list=""
+          for i in $(seq 1 "$RETRY_COUNT"); do
+            list=$(gh pr list --repo "$REPO" --base "$BASE" --state open \
+                     --json number,mergeable,labels 2>/dev/null)
+            [ -z "$list" ] && list="[]"
+            unknown=$(printf '%s' "$list" | jq '[.[] | select(.mergeable == "UNKNOWN")] | length' 2>/dev/null)
+            [ "$unknown" = "0" ] && break
+            echo "mergeable 계산 대기 중 (UNKNOWN ${unknown}건, 시도 $i/$RETRY_COUNT)"
+            [ "$i" -lt "$RETRY_COUNT" ] && sleep "$RETRY_INTERVAL_SEC"
+          done
+
+          # 충돌이 풀린 PR에서는 라벨을 뗀다. 안 떼면 낡은 라벨이 남아 다음 충돌 때
+          # "이미 알렸다"로 판정돼 **진짜 충돌이 조용해진다**.
+          printf '%s' "$list" \
+            | jq -r '.[] | select(.mergeable == "MERGEABLE")
+                         | select([.labels[].name] | any(. == "needs-rebase"))
+                         | .number' 2>/dev/null \
+            | while read -r n; do
+                [ -z "$n" ] && continue
+                gh pr edit "$n" --repo "$REPO" --remove-label needs-rebase >/dev/null 2>&1 \
+                  && echo "#$n 충돌 해소됨 — needs-rebase 제거"
+              done
+
+          # 라벨이 곧 멱등 표식이다. 코멘트 마커를 쓰지 않는 이유: 충돌은 머지마다 다시
+          # 판정되므로 마커를 커밋 SHA에 묶으면 같은 충돌로 매번 다시 부르게 된다.
+          targets=$(printf '%s' "$list" \
+            | jq -r '.[] | select(.mergeable == "CONFLICTING")
+                         | select([.labels[].name] | any(. == "needs-rebase") | not)
+                         | .number' 2>/dev/null)
+
+          if [ -z "$targets" ]; then
+            echo "새로 충돌한 PR 없음"
+            exit 0
+          fi
+
+          for n in $targets; do
+            # 라벨이 없는 저장소도 있다(`scripts/bootstrap-repo.sh`가 만든다). 실패해도
+            # 멈추지 않되 흔적은 남긴다 — 라벨이 없으면 멱등성만 잃고 알림은 그대로 간다.
+            if ! err=$(gh pr edit "$n" --repo "$REPO" --add-label needs-rebase 2>&1); then
+              echo "::warning title=needs-rebase 라벨 부착 실패::PR #${n}: ${err}"
+            fi
+            if ! err=$(gh pr edit "$n" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>&1); then
+              echo "::warning title=담당자 지정 실패::PR #${n}에 @${NOTIFY_HANDLE} 지정 실패 — 충돌 알림이 사람에게 닿지 않았을 수 있다: ${err}"
+            fi
+            {
+              printf '@%s\n\n' "$NOTIFY_HANDLE"
+              printf '%s\n\n' "⚠️ **머지 충돌** \`[AGENT-ACTION-REQUIRED]\` — #${MERGED_PR}이 \`${BASE}\`에 머지되면서 이 PR이 충돌 상태가 됐습니다."
+              printf '%s\n\n' "충돌은 체크를 빨갛게 만들지 않아서 auto-merge가 **조용히** 멈춥니다. 자동 리베이스는 하지 않습니다 — 리뷰 중인 커밋을 기계가 다시 쓰면 고친 것이 사라질 수 있어, 어느 쪽을 살릴지는 diff를 본 사람이 정해야 합니다."
+              printf '%s\n' "해소하면 다음 머지 때 \`needs-rebase\` 라벨이 자동으로 떨어집니다."
+            } | gh pr comment "$n" --repo "$REPO" --body-file -
+            echo "#$n 충돌 — 라벨·담당자·코멘트 완료"
+          done
+
       # 스텝을 합치며 잡 단위 성공/실패 가시성을 잃었다(PR #24 리뷰 지적, #26) — 스텝
       # 하나만 실패해도 잡 전체가 빨간 X가 되어, 로그를 열기 전엔 어느 정리가 실패했는지
       # 알 수 없다. 여기서 스텝별 outcome을 모아 요약에 남긴다.
@@ -413,11 +503,12 @@ jobs:
           DELETE_BRANCH: ${{ steps.delete-branch.outcome }}
           DRAIN_QUEUE: ${{ steps.drain-queue.outcome }}
           RELEASE_PR: ${{ steps.release-pr.outcome }}
+          CONFLICTS: ${{ steps.conflicts.outcome }}
         run: |
           set -euo pipefail
 
           failed=""
-          for pair in "머지 알림:$NOTIFY" "이슈 닫기:$CLOSE_ISSUES" "브랜치 삭제:$DELETE_BRANCH" "큐 구동:$DRAIN_QUEUE" "릴리스 PR:$RELEASE_PR"; do
+          for pair in "머지 알림:$NOTIFY" "이슈 닫기:$CLOSE_ISSUES" "브랜치 삭제:$DELETE_BRANCH" "큐 구동:$DRAIN_QUEUE" "릴리스 PR:$RELEASE_PR" "충돌 알림:$CONFLICTS"; do
             name="${pair%%:*}"
             outcome="${pair#*:}"
             if [ "$outcome" = "failure" ]; then
