@@ -49,6 +49,20 @@ on:
           입력과 **같은 값을 넘긴다** — 한 곳만 빠지면 그 경로의 알림만 조용히 사라진다.
         type: string
         default: ""
+      migration-paths:
+        description: |
+          이 정규식에 걸리는 파일이 릴리스에 포함되면 릴리스 PR 본문 **맨 위에 경고**를 붙이고
+          `has-migration` 라벨을 단다. 비우면 검사하지 않는다.
+
+          왜 릴리스 지점인가: 마이그레이션은 통합 브랜치에서는 되돌릴 수 있지만(개발 DB),
+          **릴리스 때 운영 DB에 그대로 재생되고 Flyway/Prisma는 나중에 고칠 수 없다.**
+          그래서 머지 게이트(`risk-paths`)에서 빼는 대신 검사를 여기로 옮겼다 — 사람이 실제로
+          판단하는 자리가 여기다.
+
+          `pre-merge-note`처럼 **매번 뜨는 고정 문구는 읽히지 않는다.** 실제로 포함됐을 때만
+          뜨는 경고라야 신호가 된다.
+        type: string
+        default: ""
       pre-merge-note:
         description: |
           릴리스 PR 본문의 "포함된 변경" 목록 앞에 그대로 넣을 마크다운(staging 링크, 머지 방식
@@ -381,6 +395,7 @@ jobs:
           BASE: ${{ inputs.base-branch }}
           TARGET: ${{ inputs.release-target }}
           PRE_MERGE_NOTE: ${{ inputs.pre-merge-note }}
+          MIGRATION_PATHS: ${{ inputs.migration-paths }}
         run: |
           set -euo pipefail
 
@@ -396,8 +411,22 @@ jobs:
           fi
           echo "$BASE가 $TARGET보다 $ahead 커밋 앞섬"
 
+          # 마이그레이션이 실제로 포함됐는지 본다. compare 응답의 파일 목록을 쓰므로
+          # 추가 API 호출이 없다.
+          migrations=""
+          if [ -n "$MIGRATION_PATHS" ]; then
+            migrations=$(jq -r '.files[]?.filename' "$RUNNER_TEMP/compare.json" 2>/dev/null \
+                           | grep -E "$MIGRATION_PATHS" || true)
+          fi
+
           # 본문은 파일로 만든다 — 커밋 제목에 백틱/따옴표가 섞여도 셸이 해석하지 않게.
           {
+            if [ -n "$migrations" ]; then
+              printf '%s\n\n' '> ⚠️ **이 릴리스에는 DB 마이그레이션이 들어 있습니다.**'
+              printf '%s\n\n' '> 머지하면 운영 DB 스키마가 같이 바뀝니다. 되돌릴 수 없는 변경(DROP·타입 축소)이 있는지 아래 파일을 먼저 보세요:'
+              printf '%s\n' "$migrations" | sed 's/^/> - `/; s/$/`/'
+              printf '\n'
+            fi
             printf '%s\n\n' "\`$BASE\` → \`$TARGET\` 운영 반영입니다. **머지하면 즉시 운영 배포 + DB 마이그레이션이 돕니다.**"
             if [ -n "$PRE_MERGE_NOTE" ]; then printf '%s\n\n' "$PRE_MERGE_NOTE"; fi
             printf '## 포함된 변경 (%s건)\n\n' "$ahead"
@@ -407,11 +436,20 @@ jobs:
 
           title="release: $BASE → $TARGET (${ahead}건)"
 
+          # 라벨도 붙인다 — 본문을 안 열어도 PR 목록에서 보인다.
+          if [ -n "$migrations" ]; then
+            gh label create has-migration --repo "$REPO" --color D93F0B \
+              --description "이 릴리스에 DB 마이그레이션이 포함됨 — 머지 전 확인" --force >/dev/null 2>&1 || true
+          fi
+
           existing=$(gh pr list --repo "$REPO" --base "$TARGET" --head "$BASE" --state open \
                        --json number --jq '(.[0].number // empty)')
 
           if [ -n "$existing" ]; then
             gh pr edit "$existing" --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/release-body.md"
+            if [ -n "$migrations" ]; then
+              gh pr edit "$existing" --repo "$REPO" --add-label has-migration >/dev/null 2>&1 || true
+            fi
             echo "기존 릴리스 PR #$existing 갱신"
             exit 0
           fi
