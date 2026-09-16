@@ -319,6 +319,21 @@ jobs:
 | `release-pr.yml` | `release-pr.yml@main` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
 | `template-sync.yml` | `template-sync.yml@main` | `schedule:` (주 1회 권장) + `workflow_dispatch:`. 입력 `base-branch`(PR의 base), `template-repo-name`(기본 `project-template` — 소유자는 소비 저장소와 같다고 본다), `template-ref`, `sync-branch` |
 
+### 리뷰를 건너뛰는 곳
+
+`claude-review.yml`은 두 부류를 리뷰하지 않는다. **둘 다 "리뷰할 새 내용이 없다"가 이유이지,
+게이트를 느슨하게 하려는 게 아니다.**
+
+- **Dependabot PR** — 시크릿이 전달되지 않아 App 토큰 발급부터 실패한다(기술적 제약).
+- **동기화 PR**(`chore/template-sync`, 입력 `skip-head-ref-prefix`) — 그 diff는 정본 저장소에서
+  **이미 리뷰를 거친 파일의 바이트 복사**다. 같은 diff를 소비 저장소 수만큼 다시 리뷰하면
+  비용만 배수로 늘고 새 지적은 안 나온다. 실측(2026-09-14~16): Claude Review가 Actions 분의
+  gh-workflows 74% · kitchen-tempo 47% · devDepth 31%를 차지한다.
+
+둘 다 **게이트는 그대로 남는다**: 동기화 PR은 `.claude/hooks/`를 건드려 위험 경로에 걸리므로
+`do-not-merge` + 사람 머지로 가고, 빌드 게이트(CI)도 돈다. job 수준 `if:`라 check-run은
+`skipped`로 생기고 필수 체크는 그걸 success로 본다.
+
 ### 충돌은 빨간불이 아니다 — `after-merge`가 부른다
 
 머지는 **다른 PR을 깨뜨리는 사건**인데, 충돌은 실패 체크를 만들지 않는다. `mergeable`이
