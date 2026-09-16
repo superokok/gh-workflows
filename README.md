@@ -274,13 +274,33 @@ jobs:
 
 | 호출부 파일 | `uses:` | 트리거 |
 |---|---|---|
-| `after-merge.yml` | `after-merge.yml@main` (릴리스 PR도 여기서 — 입력 `release-target`: 운영 브랜치(보통 `main`), `pre-merge-note`: 프로젝트별 안내 마크다운) | `pull_request: {types: [closed]}` |
+| `after-merge.yml` | `after-merge.yml@main` (릴리스 PR도 여기서 — 입력 `release-target`: 운영 브랜치(보통 `main`), `pre-merge-note`: 프로젝트별 안내 마크다운, `notify-handle`: 충돌한 PR에 부를 사람) | `pull_request: {types: [closed]}` |
 | `claude-review.yml` | `claude-review.yml@main` | `pull_request: {types: [opened, synchronize, ready_for_review, reopened]}` — `notify-handle`을 쓰면 `workflow_run: {workflows: ["CI", "Claude Review"], types: [completed]}`도 같은 `on:`에 추가한다(`notify-ready` job의 폴백 트리거, 아래 "알아둘 것" 참고). 목록에 **이 워크플로우 자신의 `name`도 넣는다** — 안 넣으면 `review` job 자신이 startup_failure 등으로 죽었을 때(#60) 아무도 감지하지 못한다 |
 | `claude-agent.yml` | `claude-agent.yml@main` | `issues: {types: [labeled]}` |
 | `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["CI", "Preview Smoke"], types: [completed]}` + `status:`. `base-branch` 입력(기본값 `"develop"`)을 통합 브랜치에 맞게 넘긴다 — 안 넘기면 `base=main`인 저장소에서는 대상 PR을 영원히 못 찾는다(#60) |
 | `preview-smoke.yml` | `preview-smoke.yml@main` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
 | `release-pr.yml` | `release-pr.yml@main` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
 | `template-sync.yml` | `template-sync.yml@main` | `schedule:` (주 1회 권장) + `workflow_dispatch:`. 입력 `base-branch`(PR의 base), `template-repo-name`(기본 `project-template` — 소유자는 소비 저장소와 같다고 본다), `template-ref`, `sync-branch` |
+
+### 충돌은 빨간불이 아니다 — `after-merge`가 부른다
+
+머지는 **다른 PR을 깨뜨리는 사건**인데, 충돌은 실패 체크를 만들지 않는다. `mergeable`이
+`CONFLICTING`이 될 뿐이고 auto-merge는 그냥 안 켜진다 — 빨간불도 담당자도 라벨도 없어서
+**PR 목록을 직접 열어보기 전엔 아무도 모른다.**
+
+WIP 제한 1이 애초에 이 상황을 막지만 그 게이트는 `claude-agent`에만 있다. 사람이 직접 연
+PR은 그 밖이고, 실제로 뚫렸다 — #72(에이전트)가 열려 있는 채 #73(사람)이 같은 파일을 건드려
+충돌했고 하루 동안 아무 신호도 없었다.
+
+그래서 `after-merge.yml`이 머지 직후 같은 base의 열린 PR을 훑어 **새로 충돌한 PR에**
+`needs-rebase` 라벨 + 담당자 + 코멘트를 붙인다(`notify-handle`을 넘긴 저장소만). 충돌이
+풀리면 다음 머지 때 라벨이 자동으로 떨어진다.
+
+**자동 리베이스는 하지 않는다.** 리뷰 중인 브랜치를 기계가 다시 쓰면 사람이 고친 커밋이
+조용히 사라질 수 있다. 어느 쪽을 살릴지는 diff를 본 사람이 정한다.
+
+`mergeable`은 GitHub이 **비동기로** 계산해서 머지 직후엔 거의 항상 `UNKNOWN`이다 —
+UNKNOWN이 남아 있는 동안만 최대 6회(10초 간격) 다시 물어본다.
 
 ### `template-sync.yml` — 공통 골격 파일 동기화
 

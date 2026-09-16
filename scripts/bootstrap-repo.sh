@@ -68,6 +68,7 @@ agent-queued|FEF2C0|앞 PR을 기다리는 대기 큐 (WIP 제한 1)
 do-not-merge|b60205|위험 구간 변경 — diff 리뷰 후 사람이 수동 머지 (auto-merge 스킵)
 followup-pr|D4C5F9|후속 이슈에서 나온 PR (리뷰 깊이 제한용)
 review-followup|BFD4F2|자동 리뷰가 남긴 후속 정리 거리
+needs-rebase|E99695|다른 PR이 머지되며 충돌 — 사람이 해소해야 auto-merge가 다시 붙는다
 LABELS
 
 # ── 2. 저장소 머지 설정 ──────────────────────────────────────────────────────
