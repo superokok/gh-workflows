@@ -118,6 +118,7 @@ replace_all() {
 RENDER_SKIPPED=""
 render_into() {
   local dest="$1" src rel out content key pass
+  local -a written=()
   while IFS= read -r -d '' src; do
     rel="${src#"$SKELETON"/}"
     case "$rel" in profiles/*) continue ;; esac
@@ -143,11 +144,17 @@ render_into() {
       done
     done
     printf '%s\n' "$content" > "$out"
+    written+=("$out")
   done < <(find "$SKELETON" -type f -print0)
 
   # 남은 자리표시자가 있으면 값이 빠진 것이다 — 조용히 넘기지 않는다.
   local leftover
-  leftover="$(grep -rohE '\{\{[A-Z_]+\}\}' "$dest" 2>/dev/null | sort -u || true)"
+  # **방금 쓴 파일만 본다.** `$dest` 전체를 훑으면 대상 저장소에 원래 있던
+  # `{{UPPER_CASE}}` 문자열(다른 템플릿 엔진, 이슈 폼 등)에 걸려, 우리가 렌더한 것과
+  # 무관하게 스크립트가 통째로 실패한다(#78). 빈 디렉터리에 렌더하는
+  # `--render-only`에서는 안 드러나고, 실제 저장소에 붙일 때만 터지는 종류다.
+  [ ${#written[@]} -eq 0 ] && return 0
+  leftover="$(grep -ohE '\{\{[A-Z_]+\}\}' "${written[@]}" 2>/dev/null | sort -u || true)"
   if [ -n "$leftover" ]; then
     echo "::error::채워지지 않은 자리표시자가 있다:" >&2
     printf '  %s\n' $leftover >&2
