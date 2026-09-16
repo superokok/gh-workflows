@@ -18,14 +18,6 @@ jobs:
 
       # 스켈레톤(`scripts/skeleton/`)은 `.github/workflows/` 밖이라 위 lint가 보지 않는다.
       # 그대로 두면 **새 프로젝트에만 깨진 호출부가 배달된다** — 이 저장소는 초록인 채로.
-      # 스택 프로파일마다 렌더해서 같은 actionlint에 통과시킨다.
-      - name: 스켈레톤 렌더 후 lint
-        run: |
-          set -euo pipefail
-          for prof in scripts/skeleton/profiles/*.env; do
-            name="$(basename "$prof" .env)"
-            out="$(mktemp -d)"
-            bash scripts/create-project.sh --stack "$name" --render-only "$out"
-            ./actionlint -color "$out"/.github/workflows/*.yml
-            echo "  ✓ $name 프로파일 렌더 결과 actionlint 통과"
-          done
+      # 렌더 + actionlint + 계약 검사를 스크립트 하나로 모아 둔다(에이전트도 같은 것을 돌린다).
+      - name: 스켈레톤 계약 검사
+        run: bash scripts/check-skeleton.sh
