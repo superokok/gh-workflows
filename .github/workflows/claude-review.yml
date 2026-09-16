@@ -503,6 +503,26 @@ jobs:
                   echo "이 커밋($SHA)은 이미 빨간불 알림을 보냈다 — 스킵"; exit 0
                 fi
 
+                # **알림 직전에 claude-fix를 다시 본다.** fix와 이 job은 **같은 workflow_run 이벤트로
+                # 동시에** 깨어난다 — job이 시작할 때 읽은 코멘트 목록에는 fix의 착수 마커가 아직 없을 수
+                # 있다. 2026-09-16 실측(#80): fix가 05:11:17에 "자동 수정을 시작합니다"를 달았는데 이 알림이
+                # **5초 뒤인 05:11:22에** 나갔다. 사람은 "고칠지 닫을지 판단하라"는 메일을 받았지만 그 시점엔
+                # 고치는 중이었고, 실제로 그다음 커밋에서 초록이 됐다.
+                #
+                # 그래서 기다렸다 다시 읽는다. 이 job은 어차피 분 단위로 올림 과금되므로 추가 비용이
+                # 사실상 없고, 빨간불 PR에서만 도는 경로다. `printf | grep` 대신 `case`를 쓰는 건
+                # 이 블록이 YAML 안의 셸이라 백슬래시 이스케이프가 한 겹 더 끼기 때문이다.
+                for _ in 1 2 3; do
+                  sleep 20
+                  comments=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null)
+                  case "$comments" in
+                    *'<!-- claude-fix:gave-up -->'*) ;;
+                    *'<!-- claude-fix:attempt -->'*)
+                      echo "claude-fix가 방금 착수했다 — 사람을 부르지 않고 양보한다"
+                      exit 0
+                      ;;
+                  esac
+                done
                 gh pr edit "$PR" --repo "$REPO" --add-label do-not-merge 2>/dev/null || true
                 assign_notify "$PR"
                 {
@@ -683,6 +703,26 @@ jobs:
             echo "이 커밋($SHA)은 이미 빨간불 알림을 보냈다 — 스킵"; exit 0
           fi
 
+          # **알림 직전에 claude-fix를 다시 본다.** fix와 이 job은 **같은 workflow_run 이벤트로
+          # 동시에** 깨어난다 — job이 시작할 때 읽은 코멘트 목록에는 fix의 착수 마커가 아직 없을 수
+          # 있다. 2026-09-16 실측(#80): fix가 05:11:17에 "자동 수정을 시작합니다"를 달았는데 이 알림이
+          # **5초 뒤인 05:11:22에** 나갔다. 사람은 "고칠지 닫을지 판단하라"는 메일을 받았지만 그 시점엔
+          # 고치는 중이었고, 실제로 그다음 커밋에서 초록이 됐다.
+          #
+          # 그래서 기다렸다 다시 읽는다. 이 job은 어차피 분 단위로 올림 과금되므로 추가 비용이
+          # 사실상 없고, 빨간불 PR에서만 도는 경로다. `printf | grep` 대신 `case`를 쓰는 건
+          # 이 블록이 YAML 안의 셸이라 백슬래시 이스케이프가 한 겹 더 끼기 때문이다.
+          for _ in 1 2 3; do
+            sleep 20
+            comments=$(gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null)
+            case "$comments" in
+              *'<!-- claude-fix:gave-up -->'*) ;;
+              *'<!-- claude-fix:attempt -->'*)
+                echo "claude-fix가 방금 착수했다 — 사람을 부르지 않고 양보한다"
+                exit 0
+                ;;
+            esac
+          done
           gh pr edit "$num" --repo "$REPO" --add-label do-not-merge 2>/dev/null || true
           assign_notify "$num"
           {
