@@ -1,0 +1,31 @@
+name: Template sync
+
+# 공통 골격 파일(훅·회귀 테스트)을 정본에서 가져온다. 로직은 superokok/gh-workflows의
+# template-sync.yml에 있고, 정본은 superokok/project-template의 `common/`이다.
+#
+# 이 저장소가 소유하지 않는 파일이 생긴다는 뜻이다: `.claude/hooks/`의 훅 3종과
+# `scripts/hooks/`의 회귀 테스트는 **여기서 고치면 다음 동기화 때 덮인다.** 고칠 것이
+# 있으면 정본 저장소에 PR을 낸다. (kitchen-tempo와 이 저장소가 같은 훅 210줄을 각자
+# 들고 있었고 테스트만 두 벌로 갈라져 있던 상태를 정리하는 것이다.)
+#
+# **`schedule:`은 default 브랜치(main)에 있는 버전만 돈다.** `workflow_run`과 같은 제약이라
+# (CLAUDE.md "알아둘 것" 참고) 이 파일이 develop에 머지돼도 릴리스 PR로 main까지 가야
+# 실제로 예약 실행이 시작된다. 그전에도 `workflow_dispatch`로는 돌릴 수 있다.
+on:
+  schedule:
+    # 매주 월요일 09:00 KST(00:00 UTC). 훅은 거의 안 바뀌어서 이보다 잦을 이유가 없고,
+    # 드리프트가 없으면 잡은 PR을 열지 않고 조용히 끝난다.
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    # 호출부가 권한을 명시해야 한다 — 안 그러면 저장소 기본값이라 push·PR 생성이 막히고
+    # 잡이 시작도 못 하고 죽는다(이 저장소의 다른 호출부와 같은 이유).
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: superokok/gh-workflows/.github/workflows/template-sync.yml@main
+    secrets: inherit
+    with:
+      base-branch: {{INTEGRATION_BRANCH}}

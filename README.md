@@ -31,6 +31,43 @@
 
 ## 새 프로젝트에 붙이기
 
+**명령 하나로 붙인다:**
+
+```bash
+scripts/create-project.sh <owner/repo> --stack next-vercel --set NOTIFY_HANDLE=<핸들>
+```
+
+`--dry-run`으로 무엇이 바뀔지 먼저 본다. `--new`를 주면 저장소도 만든다.
+스택은 `next-vercel`(기본) · `jvm-next` · `bare`.
+
+### 세 층이 각각 어디서 오나
+
+| 층 | 어디서 | 어떻게 |
+|---|---|---|
+| 루프 로직 | `superokok/gh-workflows` | `uses:`로 **참조** — 복사본이 없다 |
+| 호출부·CLAUDE.md 골격 | 이 저장소 `scripts/skeleton/` | **한 번 렌더**, 그 뒤로는 프로젝트가 소유 |
+| 훅·공통 지침 | `superokok/project-template`의 `common/` | **계속 동기화**(`template-sync.yml`) |
+| 리포 설정 | `scripts/bootstrap-repo.sh` | 라벨·보호·auto-merge |
+
+**호출부가 이 저장소에 있는 이유**: 재사용 워크플로우가 입력을 하나 늘리면 호출부 모양도 같이
+바뀐다. 같은 저장소에 두면 그 둘을 한 PR에서 맞출 수 있다. 반대로 훅·공통 지침은 로직과
+무관하게 계속 흘러가야 하므로 정본 저장소에 둔다.
+
+**스켈레톤은 없으면 만들고 있으면 건드리지 않는다.** 한 번 렌더된 호출부는 그 순간부터
+프로젝트가 소유한다 — `risk-paths` 정규식, 검증 명령, 에이전트 프롬프트는 저장소마다 자란다.
+덮어쓰면 그 조정이 통째로 날아간다(`--force-render`로 강제할 수는 있다).
+
+### 자리표시자
+
+`{{INTEGRATION_BRANCH}}` `{{PRODUCTION_BRANCH}}` `{{NOTIFY_HANDLE}}` `{{REVIEW_LEVEL}}`
+`{{JAVA_VERSION}}` `{{INSTALL}}` `{{VERIFY}}` `{{PLAN_ONLY_PATHS}}` `{{RISK_PATHS}}`
+`{{REQUIRED_CHECKS}}` `{{MENTION_PROMPT}}` `{{PROJECT_NAME}}`
+
+값이 하나라도 안 채워지면 렌더가 **실패한다** — 자리표시자가 남은 채 배달되는 쪽이 더 나쁘다.
+
+> **`ci.yml`은 스켈레톤에 없다.** 빌드 게이트는 스택이 소유한다 — 공유 `check.yml`을 부르든
+> 직접 소유하든 프로젝트가 정한다.
+
 붙이는 일은 **5층**인데, 이 저장소를 부르는 건 그중 1층뿐이다.
 
 | 층 | 무엇 | 어떻게 |
