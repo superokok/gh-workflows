@@ -439,7 +439,6 @@ jobs:
           # 그때 판정하면 충돌을 통째로 놓친다. UNKNOWN이 남아 있는 동안만 다시 물어본다.
           RETRY_COUNT=6
           RETRY_INTERVAL_SEC=10
-          list=""
           for i in $(seq 1 "$RETRY_COUNT"); do
             list=$(gh pr list --repo "$REPO" --base "$BASE" --state open \
                      --json number,mergeable,labels 2>/dev/null)
