@@ -16,8 +16,14 @@
 #
 # 값은 물어본다. 스크립트로 돌릴 땐 환경변수로 미리 주면 안 묻는다:
 #   AGENT_APP_CLIENT_ID       GitHub App의 Client ID (Iv23… 형태)
-#   AGENT_APP_PEM             private key .pem 파일 **경로** (값이 아니라 경로)
+#   AGENT_APP_PRIVATE_KEY     private key **값** (-----BEGIN … -----END … 전문)
+#   AGENT_APP_PEM             (선택) 값 대신 .pem 파일 경로를 주고 싶을 때
 #   CLAUDE_CODE_OAUTH_TOKEN   Anthropic 인증 토큰
+#
+# 대화형으로 돌리면 private key는 **붙여넣기로 받는다** — `-----END … PRIVATE KEY-----`
+# 줄이 나오면 거기서 입력이 끝난다(Ctrl-D를 따로 누르지 않아도 된다).
+# 마스터 사본이 Bitwarden 같은 곳에 텍스트로 있으면 파일로 떨어뜨릴 이유가 없고,
+# 떨어뜨린 파일은 지우는 걸 잊으면 평문 키가 디스크에 남는다.
 #
 # 값은 stdin으로만 넘긴다 — `--body "$v"`로 주면 값이 argv에 올라가 `ps`에 보인다.
 #
@@ -161,21 +167,46 @@ if [ -n "$AGENT_APP_CLIENT_ID" ]; then
   esac
 fi
 
-if [ -z "${AGENT_APP_PEM:-}" ]; then
-  # -e: readline. 경로 탭 완성이 된다.
-  read -e -r -p "private key .pem 파일 경로: " AGENT_APP_PEM
-fi
-if [ -n "$AGENT_APP_PEM" ]; then
+# private key는 **값**으로 받는다. 파일 경로(AGENT_APP_PEM)도 계속 받지만 편의 경로일 뿐이다 —
+# 마스터 사본이 비밀번호 관리자에 텍스트로 있으면 파일로 떨어뜨릴 이유가 없고, 떨어뜨린 파일은
+# 지우는 걸 잊으면 평문 키가 디스크에 남는다.
+AGENT_APP_PRIVATE_KEY="${AGENT_APP_PRIVATE_KEY:-}"
+if [ -n "${AGENT_APP_PEM:-}" ]; then
   AGENT_APP_PEM=$(normalize_path "$AGENT_APP_PEM")
   if [ ! -r "$AGENT_APP_PEM" ]; then
     echo "읽을 수 없다: $AGENT_APP_PEM" >&2
     exit 1
   fi
-  # 엉뚱한 파일을 지정했는지 본다 — 내용은 출력하지 않는다.
-  if ! head -1 "$AGENT_APP_PEM" | grep -q "BEGIN.*PRIVATE KEY"; then
-    echo "private key 파일로 보이지 않는다 (첫 줄에 BEGIN … PRIVATE KEY 없음): $AGENT_APP_PEM" >&2
-    exit 1
-  fi
+  AGENT_APP_PRIVATE_KEY="$(cat "$AGENT_APP_PEM")"
+  KEY_SOURCE="$AGENT_APP_PEM"
+elif [ -z "$AGENT_APP_PRIVATE_KEY" ]; then
+  # 여러 줄을 붙여넣게 한다. `-----END … PRIVATE KEY-----`에서 스스로 끝나므로 Ctrl-D가
+  # 필요 없다 — 붙여넣기 UX에서 Ctrl-D를 언제 눌러야 하는지가 가장 자주 막히는 지점이다.
+  # 값을 화면에 다시 찍지 않는다(터미널에는 붙여넣은 그대로가 남지만, 스크립트가 더하지는 않는다).
+  echo "private key를 붙여넣어라 (-----BEGIN … -----END … 전문). 비워 두려면 그냥 Enter:"
+  AGENT_APP_PRIVATE_KEY=""
+  while IFS= read -r _line; do
+    [ -z "$_line" ] && [ -z "$AGENT_APP_PRIVATE_KEY" ] && break
+    AGENT_APP_PRIVATE_KEY="${AGENT_APP_PRIVATE_KEY}${_line}"$'\n'
+    case "$_line" in *"-----END"*"PRIVATE KEY-----"*) break ;; esac
+  done
+  KEY_SOURCE="붙여넣은 값"
+fi
+KEY_SOURCE="${KEY_SOURCE:-환경변수 AGENT_APP_PRIVATE_KEY}"
+
+if [ -n "$AGENT_APP_PRIVATE_KEY" ]; then
+  # 엉뚱한 걸 넣었는지 본다 — 내용은 출력하지 않는다.
+  case "$AGENT_APP_PRIVATE_KEY" in
+    *"-----BEGIN"*"PRIVATE KEY-----"*) ;;
+    *) echo "private key로 보이지 않는다 (BEGIN … PRIVATE KEY 줄이 없다): $KEY_SOURCE" >&2
+       exit 1 ;;
+  esac
+  case "$AGENT_APP_PRIVATE_KEY" in
+    *"-----END"*"PRIVATE KEY-----"*) ;;
+    *) echo "private key가 잘렸다 (END … PRIVATE KEY 줄이 없다): $KEY_SOURCE" >&2
+       echo "붙여넣기가 중간에 끊겼을 수 있다 — 전문을 다시 넣어달라." >&2
+       exit 1 ;;
+  esac
 fi
 
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
@@ -184,7 +215,7 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   echo
 fi
 
-if [ -z "$AGENT_APP_CLIENT_ID" ] && [ -z "$AGENT_APP_PEM" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+if [ -z "$AGENT_APP_CLIENT_ID" ] && [ -z "$AGENT_APP_PRIVATE_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
   echo "입력된 값이 없다. 아무것도 하지 않는다." >&2
   exit 1
 fi
@@ -193,7 +224,7 @@ fi
 echo
 echo "등록할 것:"
 [ -n "$AGENT_APP_CLIENT_ID" ]     && echo "  - AGENT_APP_CLIENT_ID"
-[ -n "$AGENT_APP_PEM" ]           && echo "  - AGENT_APP_PRIVATE_KEY  ($AGENT_APP_PEM)"
+[ -n "$AGENT_APP_PRIVATE_KEY" ]   && echo "  - AGENT_APP_PRIVATE_KEY  ($KEY_SOURCE)"
 [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && echo "  - CLAUDE_CODE_OAUTH_TOKEN"
 echo "대상: ${repos[*]}"
 read -r -p "진행할까? [y/N] " ok
@@ -206,8 +237,9 @@ for r in "${repos[@]}"; do
   if [ -n "$AGENT_APP_CLIENT_ID" ]; then
     printf '%s' "$AGENT_APP_CLIENT_ID" | gh secret set AGENT_APP_CLIENT_ID --repo "$r" || rc=1
   fi
-  if [ -n "$AGENT_APP_PEM" ]; then
-    gh secret set AGENT_APP_PRIVATE_KEY --repo "$r" < "$AGENT_APP_PEM" || rc=1
+  if [ -n "$AGENT_APP_PRIVATE_KEY" ]; then
+    # stdin으로만 넘긴다 — `--body "$v"`로 주면 값이 argv에 올라가 `ps`에 보인다.
+    printf '%s' "$AGENT_APP_PRIVATE_KEY" | gh secret set AGENT_APP_PRIVATE_KEY --repo "$r" || rc=1
   fi
   if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
     printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$r" || rc=1

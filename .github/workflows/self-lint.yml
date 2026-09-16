@@ -15,3 +15,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/lint-workflows.sh
+
+      # 스켈레톤(`scripts/skeleton/`)은 `.github/workflows/` 밖이라 위 lint가 보지 않는다.
+      # 그대로 두면 **새 프로젝트에만 깨진 호출부가 배달된다** — 이 저장소는 초록인 채로.
+      # 스택 프로파일마다 렌더해서 같은 actionlint에 통과시킨다.
+      - name: 스켈레톤 렌더 후 lint
+        run: |
+          set -euo pipefail
+          for prof in scripts/skeleton/profiles/*.env; do
+            name="$(basename "$prof" .env)"
+            out="$(mktemp -d)"
+            bash scripts/create-project.sh --stack "$name" --render-only "$out"
+            ./actionlint -color "$out"/.github/workflows/*.yml
+            echo "  ✓ $name 프로파일 렌더 결과 actionlint 통과"
+          done

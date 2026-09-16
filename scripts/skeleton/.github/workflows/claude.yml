@@ -1,0 +1,54 @@
+name: Claude Code
+
+# @claude 멘션 응답 (대화형 모드). 이슈/PR 코멘트에 @claude로 후속 지시하면
+# claude-code-action이 이어서 작업한다 — 자율 루프(claude-agent.yml)가 "계획만" 남기고
+# 멈췄을 때 사용자가 방향을 주는 경로다. 멈춘 이슈를 되살리는 기본 경로이기도 하다
+# (`agent` 라벨은 이미 붙어 있으면 다시 붙일 수 없어서 라벨로는 못 깨운다).
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened]
+
+jobs:
+  claude:
+    # 'agent' 라벨 이슈는 claude-agent.yml이 전담한다 — 본문에 @claude가 섞여 있어도
+    # 여기서 또 돌면 같은 작업으로 PR이 둘 열린다.
+    if: >-
+      (github.event_name == 'issues' &&
+       contains(github.event.issue.body, '@claude') &&
+       !contains(github.event.issue.labels.*.name, 'agent')) ||
+      (github.event_name != 'issues' && contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      # 재사용 워크플로우들과 같은 자격증명을 쓴다 — 이 파일은 이 저장소가 소유하므로
+      # 토큰 발급도 여기서 직접 한다. 자동 GITHUB_TOKEN을 쓰면 안 되는 이유는 둘이다:
+      # Workflows 권한이 없어 .github/workflows/ 커밋이 거부되고, 그 토큰으로 만든
+      # 이벤트는 다른 워크플로우를 트리거하지 않는다.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+      # 에이전트는 git fetch/switch/checkout 권한이 없다 → 여기서 develop을 체크아웃해
+      # 작업 기준을 맞춘다. PR 리뷰 코멘트면 그 PR 브랜치, 그 외(이슈)면 develop.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref || 'develop' }}
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          claude_args: >-
+            --append-system-prompt "{{MENTION_PROMPT}}"

@@ -1,0 +1,56 @@
+name: Claude Agent (issue → PR)
+
+# 자율 작업 루프의 실행부. 로직은 superokok/gh-workflows의 claude-agent.yml에 있다 —
+# 이 프로젝트는 트리거와 **이 스택 고유의 값**만 갖는다.
+#
+# 전제(저장소 설정 — 코드 아님):
+#  - Claude GitHub App 설치 + secrets.CLAUDE_CODE_OAUTH_TOKEN (claude /install-github-app)
+#  - secrets.AGENT_APP_CLIENT_ID / AGENT_APP_PRIVATE_KEY (에이전트 App)
+#  - Settings → General → Allow auto-merge
+#  - Settings → Branches → 통합 브랜치 보호, Require status checks = 이 저장소의 빌드 잡 이름들 + `review / review`
+#  - 라벨 'agent', 'do-not-merge'
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  agent:
+    # 호출부가 권한을 명시해야 한다 — claude-review.yml의 주석 참고.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    uses: superokok/gh-workflows/.github/workflows/claude-agent.yml@main
+    secrets: inherit
+    # 재사용 워크플로우의 기본값은 kitchen-tempo(Node + Prisma + Next.js) 기준이다.
+    # 이 저장소는 Spring Boot + Next.js + Expo라 **하나도 맞지 않는다** — 그런데
+    # `with:`를 생략하면 그 기본값이 조용히 상속된다. 실제로 2026-09-12에 이슈 #7이
+    # `npx prisma generate`에서 죽었다(prisma가 없으니 npx가 최신 rc를 받아왔고 거기엔
+    # `generate` 커맨드가 없다). 에이전트 액션은 시작도 못 했고 이슈는 라벨만 붙은 채
+    # 방치됐다. **기본값이 안 맞는 항목은 빠짐없이 명시한다** — 맞는 것까지 적는 건
+    # 상속이 보이지 않아서다.
+    with:
+      # JVM 스택이면 빌드 파일의 toolchain과 맞춘다(아니면 비운다). gh-workflows #48부터 setup-java를
+      # 지원해서, 러너 기본 JDK로 "환경 때문에 못 돎"이 되던 문제가 사라졌다.
+      java-version: "{{JAVA_VERSION}}"
+      # 루트가 npm workspaces(shared/web/app)라 루트 한 번으로 셋 다 설치된다.
+      install: "{{INSTALL}}"
+      # Prisma 없음. 빈 문자열이면 준비 단계를 통째로 건너뛴다.
+      prepare: ""
+      # CI의 web-and-app 잡(web·app 타입체크)에 backend 단위 테스트를 더한 것.
+      # -PwithDocker는 안 붙인다 — 이 재사용 워크플로우 러너에 Docker 소켓이 보장되지
+      # 않고, Testcontainers 통합 테스트는 PR의 CI(`backend` 잡)가 이미 본다. 여기서
+      # 필요한 건 에이전트가 자기 변경을 러너에서 되돌려 확인할 빠른 검증이다.
+      verify: "{{VERIFY}}"
+      # docs/BUSINESS_LOGIC.md가 이 저장소엔 없다. 기록 파일 없음.
+      changelog-file: ""
+      # 사전 계획 게이트 — CLAUDE.md와 같은 기준으로 Flyway 마이그레이션 하나뿐이다.
+      plan-only-paths: "{{PLAN_ONLY_PATHS}}"
+      # 경로 목록을 여기 복사하지 않는다 — 복사본은 정본이 바뀔 때마다 조용히 낡는다.
+      risk-areas: >-
+        판정 정본은 이 저장소 `.github/workflows/enable-auto-merge.yml`의 `risk-paths`
+        정규식이다. 체크아웃에 그 파일이 있으니 직접 읽고, 네가 바꾼 경로가 거기 걸리는지
+        판단한다

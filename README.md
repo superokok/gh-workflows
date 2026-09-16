@@ -31,6 +31,43 @@
 
 ## 새 프로젝트에 붙이기
 
+**명령 하나로 붙인다:**
+
+```bash
+scripts/create-project.sh <owner/repo> --stack next-vercel --set NOTIFY_HANDLE=<핸들>
+```
+
+`--dry-run`으로 무엇이 바뀔지 먼저 본다. `--new`를 주면 저장소도 만든다.
+스택은 `next-vercel`(기본) · `jvm-next` · `bare`.
+
+### 세 층이 각각 어디서 오나
+
+| 층 | 어디서 | 어떻게 |
+|---|---|---|
+| 루프 로직 | `superokok/gh-workflows` | `uses:`로 **참조** — 복사본이 없다 |
+| 호출부·CLAUDE.md 골격 | 이 저장소 `scripts/skeleton/` | **한 번 렌더**, 그 뒤로는 프로젝트가 소유 |
+| 훅·공통 지침 | `superokok/project-template`의 `common/` | **계속 동기화**(`template-sync.yml`) |
+| 리포 설정 | `scripts/bootstrap-repo.sh` | 라벨·보호·auto-merge |
+
+**호출부가 이 저장소에 있는 이유**: 재사용 워크플로우가 입력을 하나 늘리면 호출부 모양도 같이
+바뀐다. 같은 저장소에 두면 그 둘을 한 PR에서 맞출 수 있다. 반대로 훅·공통 지침은 로직과
+무관하게 계속 흘러가야 하므로 정본 저장소에 둔다.
+
+**스켈레톤은 없으면 만들고 있으면 건드리지 않는다.** 한 번 렌더된 호출부는 그 순간부터
+프로젝트가 소유한다 — `risk-paths` 정규식, 검증 명령, 에이전트 프롬프트는 저장소마다 자란다.
+덮어쓰면 그 조정이 통째로 날아간다(`--force-render`로 강제할 수는 있다).
+
+### 자리표시자
+
+`{{INTEGRATION_BRANCH}}` `{{PRODUCTION_BRANCH}}` `{{NOTIFY_HANDLE}}` `{{REVIEW_LEVEL}}`
+`{{JAVA_VERSION}}` `{{INSTALL}}` `{{VERIFY}}` `{{PLAN_ONLY_PATHS}}` `{{RISK_PATHS}}`
+`{{REQUIRED_CHECKS}}` `{{MENTION_PROMPT}}` `{{PROJECT_NAME}}`
+
+값이 하나라도 안 채워지면 렌더가 **실패한다** — 자리표시자가 남은 채 배달되는 쪽이 더 나쁘다.
+
+> **`ci.yml`은 스켈레톤에 없다.** 빌드 게이트는 스택이 소유한다 — 공유 `check.yml`을 부르든
+> 직접 소유하든 프로젝트가 정한다.
+
 붙이는 일은 **5층**인데, 이 저장소를 부르는 건 그중 1층뿐이다.
 
 | 층 | 무엇 | 어떻게 |
@@ -128,7 +165,7 @@ scripts/sync-secrets.sh superokok/new-repo
 ```
 
 **빈 입력은 "그 secret은 건드리지 않음"이다** — 하나만 교체할 때 나머지는 Enter로 넘긴다.
-무인 실행이 필요하면 `AGENT_APP_CLIENT_ID` · `AGENT_APP_PEM`(파일 경로) · `CLAUDE_CODE_OAUTH_TOKEN`을
+무인 실행이 필요하면 `AGENT_APP_CLIENT_ID` · `AGENT_APP_PRIVATE_KEY`(키 **값**, 파일 경로를 주고 싶으면 `AGENT_APP_PEM`) · `CLAUDE_CODE_OAUTH_TOKEN`을
 환경변수로 미리 주면 묻지 않는다.
 
 
@@ -281,6 +318,21 @@ jobs:
 | `preview-smoke.yml` | `preview-smoke.yml@main` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
 | `release-pr.yml` | `release-pr.yml@main` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
 | `template-sync.yml` | `template-sync.yml@main` | `schedule:` (주 1회 권장) + `workflow_dispatch:`. 입력 `base-branch`(PR의 base), `template-repo-name`(기본 `project-template` — 소유자는 소비 저장소와 같다고 본다), `template-ref`, `sync-branch` |
+
+### 리뷰를 건너뛰는 곳
+
+`claude-review.yml`은 두 부류를 리뷰하지 않는다. **둘 다 "리뷰할 새 내용이 없다"가 이유이지,
+게이트를 느슨하게 하려는 게 아니다.**
+
+- **Dependabot PR** — 시크릿이 전달되지 않아 App 토큰 발급부터 실패한다(기술적 제약).
+- **동기화 PR**(`chore/template-sync`, 입력 `skip-head-ref-prefix`) — 그 diff는 정본 저장소에서
+  **이미 리뷰를 거친 파일의 바이트 복사**다. 같은 diff를 소비 저장소 수만큼 다시 리뷰하면
+  비용만 배수로 늘고 새 지적은 안 나온다. 실측(2026-09-14~16): Claude Review가 Actions 분의
+  gh-workflows 74% · kitchen-tempo 47% · devDepth 31%를 차지한다.
+
+둘 다 **게이트는 그대로 남는다**: 동기화 PR은 `.claude/hooks/`를 건드려 위험 경로에 걸리므로
+`do-not-merge` + 사람 머지로 가고, 빌드 게이트(CI)도 돈다. job 수준 `if:`라 check-run은
+`skipped`로 생기고 필수 체크는 그걸 success로 본다.
 
 ### 충돌은 빨간불이 아니다 — `after-merge`가 부른다
 

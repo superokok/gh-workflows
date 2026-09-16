@@ -1,0 +1,55 @@
+name: Claude Review
+
+# 2차 AI 리뷰 게이트. 로직은 superokok/gh-workflows의 claude-review.yml에 있다 —
+# 이 프로젝트는 트리거만 소유한다.
+#
+# `workflow_run`은 `notify-ready` 폴백 job의 트리거다(gh-workflows #60). `review` job의
+# 마지막 스텝은 리뷰가 끝나는 시점에 한 번만 담당자를 판정하는데, CI가 리뷰보다 늦게
+# 끝나면 그 스텝은 초록을 못 보고 지나간다 — 그러면 담당자가 영영 안 붙는다.
+# 이 트리거로 깨어나 같은 판정을 한 번 더 한다(멱등, 흔한 경우엔 즉시 종료).
+#
+# ⚠️ **이 목록에 "Claude Review"(이 워크플로우 자신의 이름)를 넣지 않는다.** gh-workflows
+# README의 호출부 표는 "자신의 이름도 넣으라"고 하지만, 그 저장소가 자기 호출부
+# (`self-review.yml`)에서 실제로 넣어봤다가 **자기 참조가 파일을 무효로 만들어 GitHub
+# 파서가 거부했다**(2026-09-14 PR #63). run이 아예 생성되지 않으니 필수 체크
+# `review / review`가 영구 Pending으로 굳어 PR이 머지 불가가 된다 — 이 저장소에서
+# `review / review`는 필수 체크라 **모든 PR이 같은 식으로 막힌다.** actionlint는
+# 통과시키므로 로컬 검증으로도 안 걸린다. README 쪽이 #63을 반영하지 못한 상태다.
+#
+# `review` job 자신이 startup_failure로 죽는 경우의 커버리지는 `claude-fix.yml`이 맡는다 —
+# 그쪽 `workflows:` 목록에 "Claude Review"를 넣었다(자기 참조가 아니라 유효하다).
+# gh-workflows가 `self-fix.yml`로 하는 것과 같은 구조다.
+#
+# `workflow_run` 호출부는 **default 브랜치(main)에 있는 버전이 돈다.** 이 파일을 develop에
+# 머지하는 것만으로는 효력이 없고, 릴리스 PR로 main까지 가야 살아난다.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  review:
+    # 호출부가 권한을 명시해야 한다. 안 그러면 호출부 job의 토큰 권한이 저장소 기본값이라
+    # `id-token: write`가 없고, 불린 워크플로우가 그걸 요구하는 순간 job이 시작도 못 하고
+    # `startup_failure`로 죽는다 — 로그도 check-run도 남지 않아 auto-merge가 "리뷰 없음"으로
+    # 영원히 대기한다(kitchen-tempo 2026-09-07 실제 사고).
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: superokok/gh-workflows/.github/workflows/claude-review.yml@main
+    secrets: inherit
+    with:
+      # 담당자 지정은 여기(초록일 때 붙임)와 enable-auto-merge(뗌)가 짝을 이룬다
+      # (gh-workflows #55·#57). claude-fix도 같은 값을 쓴다 — 셋 중 하나가 빠지면
+      # 붙이거나 떼는 쪽 절반이 죽는다(#31 실측: 이 with: 블록이 없어서 아무도
+      # 담당자를 붙이지 않았다).
+      notify-handle: {{NOTIFY_HANDLE}}
+      # 안 넘기면 `/code-review`가 직전 세션의 레벨을 재사용하는데, CI는 매 실행이
+      # 새 세션이라 무엇이 쓰일지 예측할 수 없다 — 게이트가 비결정적이면 게이트가
+      # 아니다. 이 저장소엔 medium이 적정선이다(기본값과 같지만 명시한다).
+      review-level: {{REVIEW_LEVEL}}
