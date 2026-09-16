@@ -280,7 +280,7 @@ jobs:
 | `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["CI", "Preview Smoke"], types: [completed]}` + `status:`. `base-branch` 입력(기본값 `"develop"`)을 통합 브랜치에 맞게 넘긴다 — 안 넘기면 `base=main`인 저장소에서는 대상 PR을 영원히 못 찾는다(#60) |
 | `preview-smoke.yml` | `preview-smoke.yml@main` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
 | `release-pr.yml` | `release-pr.yml@main` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
-| `template-sync.yml` | `template-sync.yml@main` | `schedule:` (주 1회 권장) + `workflow_dispatch:`. 입력 `base-branch`(PR의 base), `template-repo`(기본 `superokok/project-template`), `template-ref`, `sync-branch` |
+| `template-sync.yml` | `template-sync.yml@main` | `schedule:` (주 1회 권장) + `workflow_dispatch:`. 입력 `base-branch`(PR의 base), `template-repo-name`(기본 `project-template` — 소유자는 소비 저장소와 같다고 본다), `template-ref`, `sync-branch` |
 
 ### 충돌은 빨간불이 아니다 — `after-merge`가 부른다
 
@@ -328,6 +328,11 @@ UNKNOWN이 남아 있는 동안만 최대 6회(10초 간격) 다시 물어본다
   자동으로 사라지지 않게).
 - 커밋은 App 토큰으로 만든다 — `GITHUB_TOKEN`으로 만든 커밋은 다른 워크플로우를 깨우지
   않아 동기화 PR에서 CI가 안 돈다. 검증 없이 훅이 바뀌는 PR이 열리는 셈이 된다.
+- **App 토큰을 둘 받는다.** `create-github-app-token`은 `owner`/`repositories`를 안 주면
+  **호출한 저장소에만** 유효한 토큰을 준다 — 정본은 다른 저장소라 체크아웃이 404로 죽는다
+  (2026-09-15 실측). 한 토큰에 `owner:`만 줘서 넓히면 모든 소비 저장소의 동기화 잡이
+  소유자의 **모든 저장소에 쓰기 권한**을 쥐게 되므로, 정본 하나만 읽는 토큰을 따로 받는다
+  (`permission-contents: read`).
 
 `.claude/hooks/`는 소비 저장소에서 위험 경로라 이 PR은 사람이 머지한다. 훅이 조용히 바뀌지
 않는다는 뜻이고, 의도한 동작이다.
