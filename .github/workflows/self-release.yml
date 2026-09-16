@@ -1,0 +1,105 @@
+name: Release (v1 태그 이동)
+
+# **머지와 배포를 분리한다.**
+#
+# 소비 저장소가 `@main`을 핀하던 동안에는 **main 머지가 곧 전 프로젝트 반영**이었다. 그래서
+# 모든 PR이 사람 머지여야 했고(README "이 저장소 자신" 참고), PR 하나가 22~56분씩 대기했다
+# (2026-09-16 실측). 그런데 그 대기에서 잡힌 문제는 0건이었다 — 게이트가 아니라 지연이었다.
+#
+# 소비 저장소가 `@v1`을 핀하면 관계가 끊긴다:
+#
+#   main 머지      → 아무 프로젝트도 바뀌지 않는다 (그래서 자동 머지해도 된다)
+#   v1 태그 이동   → 그때 전 프로젝트에 반영된다 (이것이 릴리스다)
+#
+# `actions/checkout@v4`처럼 **움직이는 메이저 태그**를 쓴다. 깨는 변경은 `v2`를 새로 만들고
+# 소비 저장소를 하나씩 옮긴다 — 한 번에 전부 깨지지 않는 게 요점이다.
+#
+# ── 태그를 언제 옮기나 ────────────────────────────────────────────────────────
+# **PR에 `release` 라벨이 붙어 머지되면 자동으로 옮긴다.**
+#
+# 수동 릴리스(사람이 기억해서 dispatch)로 두지 않는 이유: 잊으면 고친 게 프로젝트에 영영
+# 안 가는데 **그 상태가 조용하다.** 이 저장소가 반복해서 겪은 실패 형태가 정확히 그거다.
+# 라벨은 PR을 열 때 이미 "이건 지금 나가야 한다"를 판단하는 자리라, 별도로 기억할 게 없다.
+#
+# 급하지 않은 변경은 라벨 없이 main에 쌓아 두고, 나중에 아무 PR에 라벨을 붙이거나
+# `workflow_dispatch`로 한 번에 내보낸다.
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 태그를 옮길 대상(기본 main)
+        type: string
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # 라벨이 붙어 **머지된** PR이거나, 사람이 직접 돌린 경우만.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       contains(github.event.pull_request.labels.*.name, 'release'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 같은 시점에 두 번 돌면 태그가 어느 커밋을 가리키는지 경합한다. 취소하지 않고 줄 세운다 —
+    # 중간에 잘리면 "태그를 옮겼는데 요약은 못 남긴" 상태가 된다.
+    concurrency:
+      group: release-tag
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: v1 태그를 옮긴다
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ github.event.inputs.ref || 'main' }}
+        run: |
+          set -euo pipefail
+
+          sha=$(git rev-parse "origin/$TARGET")
+          short=$(git rev-parse --short "origin/$TARGET")
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 움직이는 태그라 강제로 민다. **이 저장소에서 유일하게 force가 허용되는 곳**이고,
+          # 대상이 태그(히스토리가 아니다)라 되돌리기도 태그를 다시 옮기면 끝난다.
+          git tag -f v1 "$sha"
+          git push -f origin v1
+
+          # 되돌릴 지점을 남긴다. 움직이는 태그만 있으면 "지난주 상태로"가 불가능하다.
+          stamp="v1.$(date -u +%Y%m%d).${short}"
+          if git rev-parse -q --verify "refs/tags/$stamp" >/dev/null; then
+            echo "$stamp 이미 있음 — 같은 커밋을 다시 릴리스한 것이다"
+          else
+            git tag "$stamp" "$sha"
+            git push origin "$stamp"
+          fi
+
+          {
+            printf '### 릴리스\n\n'
+            printf '`v1` → `%s` (%s)\n\n' "$short" "$TARGET"
+            printf '되돌리려면: `git tag -f v1 <이전 sha> && git push -f origin v1`\n'
+            printf '고정 태그: `%s`\n' "$stamp"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "v1 → $short, 고정 태그 $stamp"
+
+      - name: 소비 저장소에 무엇이 나갔는지 남긴다
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # 릴리스는 PR 코멘트로도 남긴다 — 나중에 "언제 나갔나"를 PR에서 바로 볼 수 있다.
+          gh pr comment "$PR" --repo "$REPO" \
+            --body "🚀 **릴리스됨** — \`v1\` 태그가 이 머지까지 이동했습니다. \`@v1\`을 핀한 소비 저장소에 다음 실행부터 반영됩니다."

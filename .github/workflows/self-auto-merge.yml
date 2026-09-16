@@ -1,0 +1,38 @@
+name: Enable auto-merge
+
+# 이 저장소도 auto-merge를 쓴다 — **`v1` 태그 도입으로 main 머지가 더 이상 배포가 아니게 된
+# 다음부터** 가능해진 것이다(`self-release.yml` 참고).
+#
+# 그전에는 소비 저장소가 `@main`을 핀해서 **머지 = 전 프로젝트 즉시 반영**이었고, 그래서 모든
+# PR이 사람 머지였다. 실측(2026-09-16): PR 9건이 22~56분씩 대기했는데 그 대기에서 잡힌 문제는
+# 0건이었다 — 잡은 건 전부 `lint`와 자동 리뷰였다. 게이트가 아니라 지연이었다.
+#
+# 이제 순서가 이렇게 된다:
+#   PR 초록 → 자동 머지(main)     → 아무 프로젝트도 안 바뀐다
+#   `release` 라벨              → v1 이동 → 그때 반영된다
+#
+# 사람이 판단하는 지점은 **"지금 내보낼까"** 하나로 줄어든다.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  decide:
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/enable-auto-merge.yml
+    secrets: inherit
+    with:
+      # 이 저장소는 통합 브랜치가 없다 — main 하나다.
+      base-branch: main
+      notify-handle: superokok
+      # **위험 경로를 거의 두지 않는다.** main 머지가 배포가 아니게 됐으므로, 틀린 것이
+      # 소비 저장소에 닿기 전에 `release` 라벨이라는 사람 판단이 한 번 더 있다.
+      #
+      # 남기는 둘은 그 판단 자체를 무너뜨리는 것들이다:
+      #   - `self-release.yml` — 릴리스가 조용히 멈추면 고친 게 영영 안 나간다
+      #   - `scripts/sync-secrets.sh` — 자격증명을 다루는 경로
+      risk-paths: '^(\.github/workflows/self-release\.yml$|scripts/sync-secrets\.sh$)'
