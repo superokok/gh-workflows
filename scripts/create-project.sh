@@ -22,6 +22,12 @@
 #     --new                 저장소를 새로 만든다(private). 없으면 기존 저장소에 붙인다
 #     --render-only <디렉터리>  렌더 결과만 그 디렉터리에 쓰고 끝낸다(검증용)
 #     --force-render        이미 있는 호출부도 스택 기본값으로 덮어쓴다(기본은 건드리지 않음)
+#     --no-common           정본의 `common/`을 복사하지 않는다
+#                           **정본 저장소 자신에 붙일 때 반드시 쓴다** — 자기 `common/`을
+#                           루트로 복사해 훅·테스트가 통째로 중복된다(2026-09-16 dry-run 확인)
+#     --skip <상대경로>     그 스켈레톤 파일을 렌더하지 않는다 (여러 번 가능)
+#                           예: 정본 저장소 자신에는 `--skip .github/workflows/template-sync.yml`
+#                           — 자기 자신을 정본으로 삼아 common/을 루트로 복사해 중복을 만든다
 #     --dry-run             아무것도 바꾸지 않고 무엇을 할지만 출력
 set -euo pipefail
 
@@ -30,6 +36,8 @@ SKELETON="$SELF_DIR/skeleton"
 TEMPLATE_REPO="${TEMPLATE_REPO:-superokok/project-template}"
 
 REPO=""; STACK="next-vercel"; PROFILE=""; NEW=0; DRY=0; RENDER_ONLY=""; FORCE_RENDER=0
+declare -a SKIP=()
+NO_COMMON=0
 declare -a OVERRIDES=()
 
 while [ $# -gt 0 ]; do
@@ -40,6 +48,8 @@ while [ $# -gt 0 ]; do
     --new)         NEW=1; shift ;;
     --render-only) RENDER_ONLY="$2"; shift 2 ;;
     --force-render) FORCE_RENDER=1; shift ;;
+    --skip)        SKIP+=("$2"); shift 2 ;;
+    --no-common)   NO_COMMON=1; shift ;;
     --dry-run)     DRY=1; shift ;;
     -h|--help)     sed -n '1,30p' "$0"; exit 0 ;;
     -*) echo "알 수 없는 옵션: $1" >&2; exit 2 ;;
@@ -111,6 +121,11 @@ render_into() {
   while IFS= read -r -d '' src; do
     rel="${src#"$SKELETON"/}"
     case "$rel" in profiles/*) continue ;; esac
+    local skipped=0 sk
+    for sk in ${SKIP+"${SKIP[@]}"}; do
+      [ "$sk" = "$rel" ] && skipped=1
+    done
+    [ "$skipped" = 1 ] && continue
     out="$dest/$rel"
     if [ -e "$out" ] && [ "$FORCE_RENDER" = 0 ]; then
       RENDER_SKIPPED="${RENDER_SKIPPED}${RENDER_SKIPPED:+ }$rel"
@@ -192,6 +207,9 @@ else
     say "    이미 있어 건드리지 않음(프로젝트 소유): $RENDER_SKIPPED"
   fi
 
+  if [ "$NO_COMMON" = 1 ]; then
+    say "    정본 common/ 복사 건너뜀 (--no-common)"
+  else
   git clone -q --depth 1 "https://github.com/$TEMPLATE_REPO.git" "$WORK/template" 2>/dev/null || {
     warn "정본($TEMPLATE_REPO) clone 실패 — 훅·공통 지침은 건너뜁니다"; }
   if [ -d "$WORK/template/common" ]; then
@@ -202,6 +220,7 @@ else
           cp -pP "$WORK/template/common/$rel" "$WORK/repo/$rel"
         done
     ok "훅·공통 지침 복사 (정본 $TEMPLATE_REPO의 common/)"
+  fi
   fi
 
   cd "$WORK/repo"
