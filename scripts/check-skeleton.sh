@@ -25,28 +25,32 @@ fail=0
 requires=""
 for f in .github/workflows/*.yml; do
   case "$(basename "$f")" in self-*) continue ;; esac
-  if grep -qE '^      base-branch:' "$f"; then
+  if grep -qE '^[[:space:]]+base-branch:' "$f"; then
     requires="${requires} $(basename "$f")"
   fi
 done
 echo "base-branch를 받는 재사용 워크플로우:${requires}"
+req=" ${requires} "
 
 # ── 2. 그 워크플로우를 부르는 스켈레톤 호출부가 값을 넘기는지 ────────────────
 for caller in "$SKELETON"/*.yml; do
-  called=$(grep -oE 'uses: superokok/gh-workflows/\.github/workflows/[a-z-]+\.yml' "$caller" \
+  called_list=$(grep -oE 'uses: superokok/gh-workflows/\.github/workflows/[a-z-]+\.yml' "$caller" \
              | sed 's#.*/##' || true)
-  [ -z "$called" ] && continue          # 재사용 워크플로우를 안 부르는 호출부(claude.yml 등)
-  case "$requires" in
-    *" $called"*)
-      if grep -qE '^\s+base-branch:' "$caller"; then
-        echo "  ✓ $(basename "$caller") → $called (base-branch 넘김)"
-      else
-        echo "::error file=$caller::$called 은 base-branch를 받는데 이 호출부가 넘기지 않는다 — 통합 브랜치가 'develop'이 아닌 저장소에서 게이트가 전부 skipped로 죽는다"
-        fail=1
-      fi
-      ;;
-    *) echo "  - $(basename "$caller") → $called (base-branch 불필요)" ;;
-  esac
+  [ -z "$called_list" ] && continue     # 재사용 워크플로우를 안 부르는 호출부(claude.yml 등)
+  while IFS= read -r called; do
+    [ -z "$called" ] && continue
+    case "$req" in
+      *" $called "*)
+        if grep -qE '^[[:space:]]+base-branch:' "$caller"; then
+          echo "  ✓ $(basename "$caller") → $called (base-branch 넘김)"
+        else
+          echo "::error file=$caller::$called 은 base-branch를 받는데 이 호출부가 넘기지 않는다 — 통합 브랜치가 'develop'이 아닌 저장소에서 게이트가 전부 skipped로 죽는다"
+          fail=1
+        fi
+        ;;
+      *) echo "  - $(basename "$caller") → $called (base-branch 불필요)" ;;
+    esac
+  done <<< "$called_list"
 done
 
 # ── 3. 렌더된 결과에 자리표시자가 남지 않는지 (프로파일마다) ─────────────────
