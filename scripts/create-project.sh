@@ -78,8 +78,8 @@ load_env_file() {
     # YAML 안으로 들어가 **줄바꿈으로 해석된다** — 한 줄이어야 할 프롬프트가 두 줄로 쪼개져
     # YAML 파싱이 깨진다(2026-09-16 실측: `develop/main` 자리에서 claude.yml이 무너졌다).
     # 저장소에는 `.gitattributes`로 LF를 강제하지만, 사용자가 손으로 만든 프로파일은 그 밖이다.
-    key="${key%$''}"
-    val="${val%$''}"
+    key="${key%$'\r'}"
+    val="${val%$'\r'}"
     V["$key"]="$val"
   done < "$f"
 }
