@@ -16,6 +16,12 @@ on:
 
 jobs:
   agent:
+    # 무관한 라벨(예: `do-not-merge`, `review-followup`)에도 깨어나지 않도록 가드한다.
+    # claude.yml과 같은 이유 — 재사용 워크플로우 내부 job들의 `if:`(agent-agent.yml 참고)가
+    # 결국 걸러내긴 하지만, 그 전에 이 호출부 job 자체가 이미 시작·청구된다.
+    # 'agent'는 착수, 'agent-queued'는 판이 비었을 때 즉시 승격(wake-if-idle) — 재사용
+    # 워크플로우가 실제로 반응하는 라벨 두 개와 정확히 맞춘다.
+    if: github.event.label.name == 'agent' || github.event.label.name == 'agent-queued'
     # 호출부가 권한을 명시해야 한다 — claude-review.yml의 주석 참고.
     permissions:
       contents: write
