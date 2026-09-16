@@ -210,6 +210,27 @@ jobs:
             echo "$BRANCH 이미 없음(auto-merge가 --delete-branch로 지움) — 스킵"; exit 0
           fi
 
+          # **다른 PR의 base면 지우지 않는다(스택 PR).**
+          #
+          # 2026-09-16 실측: #84(base=main)가 07:49:47에 머지되고 10초 뒤 이 스텝이
+          # `fix/skeleton-base-branch`를 지우자, 그 브랜치를 base로 하던 #85가 **머지되지 않은
+          # 채 CLOSED**로 사라졌다(GitHub은 base 브랜치가 없어지면 PR을 닫는다).
+          #
+          # GitHub UI로 머지하면 base가 없어진 PR을 상위 base로 자동 재지정해 주지만, 그건
+          # **GitHub이 스스로 브랜치를 지울 때** 얘기다. 이 워크플로우처럼 API로 직접 지우면
+          # 그 보정이 걸리지 않는다.
+          #
+          # 스택 PR은 정본 지침(`work-loop.md`)이 권장하는 방식이다 — WIP 제한 1 아래에서
+          # 작성자가 앞 PR을 기다리지 않고 이어가는 유일한 길이다. 그 방식을 이 뒷정리가
+          # 조용히 부수면 안 된다. 뒷정리는 나중에 할 수 있고, 닫힌 PR은 되돌릴 수 없다.
+          stacked=$(gh pr list --repo "$REPO" --base "$BRANCH" --state open \
+                      --json number --jq '[.[].number] | join(", ")' 2>/dev/null || true)
+          if [ -n "$stacked" ]; then
+            echo "$BRANCH 를 base로 하는 열린 PR이 있다(#${stacked}) — 지우지 않는다"
+            echo "  그 PR들이 머지되거나 base를 옮긴 뒤 다음 머지 때 정리된다"
+            exit 0
+          fi
+
           gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH"
           echo "삭제됨: $BRANCH"
 
