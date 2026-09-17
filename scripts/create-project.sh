@@ -210,7 +210,21 @@ else
   # 주는데, 붙이는 대상은 PR의 base가 될 통합 브랜치다. 이걸 빼면 이미 통합 브랜치에
   # 들어가 있는 파일을 "없다"고 판단해 되돌리는 PR을 연다(2026-09-16 dry-run에서 확인).
   if ! git -C "$WORK/repo" checkout -q "${V[INTEGRATION_BRANCH]}" 2>/dev/null; then
-    warn "통합 브랜치 ${V[INTEGRATION_BRANCH]}가 없다 — 기본 브랜치 그대로 진행한다"
+    # **없으면 여기서 만든다.** 예전엔 경고만 하고 기본 브랜치로 계속 갔는데, 그러면 아래
+    # `gh pr create --base <통합 브랜치>`가 `Base ref must be a branch`로 죽는다 —
+    # 저장소·파일·푸시까지 다 끝난 뒤에 마지막 한 줄에서 실패해서, 반쯤 만들어진 저장소가
+    # 남는다(2026-09-17 superokok/devDepth를 실제로 만들면서 밟았다).
+    #
+    # 통합 브랜치는 `bootstrap-repo.sh`도 만들지만 그건 이 단계보다 **뒤에** 돈다.
+    # 순서를 바꾸는 대신 여기서 만든다 — 브랜치가 있어야 PR을 열 수 있고, bootstrap의
+    # 생성은 이미 멱등이라 두 번 만들어도 무해하다.
+    if [ "$DRY" = 1 ]; then
+      say "  [dry-run] 통합 브랜치 ${V[INTEGRATION_BRANCH]} 생성 + push"
+    else
+      git -C "$WORK/repo" switch -qc "${V[INTEGRATION_BRANCH]}"
+      git -C "$WORK/repo" push -q -u origin "${V[INTEGRATION_BRANCH]}"
+      ok "통합 브랜치 ${V[INTEGRATION_BRANCH]} 생성 (기본 브랜치에서 갈라냄)"
+    fi
   fi
   ok "clone (${V[INTEGRATION_BRANCH]})"
 fi
