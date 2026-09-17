@@ -204,18 +204,28 @@ jobs:
             esac
           done
 
-      # **base가 통합 브랜치인지 보지 않는다(2026-09-17).** 예전엔 `base.ref == inputs.base-branch`
+      # **base가 통합 브랜치인지는 보지 않는다(2026-09-17).** 예전엔 `base.ref == inputs.base-branch`
       # 를 요구했는데, 그러면 **스택 PR의 head 브랜치가 영영 안 지워진다** — 스택된 PR의 base는
       # 앞 PR의 브랜치라 이 조건이 거짓이기 때문이다. 스택이 표준 패턴이 된 지금은 쌓을 때마다
       # 찌꺼기가 하나씩 남는다(2026-09-16 gh-workflows #88: `feat/release-by-tag`가 머지됐는데
       # 그대로 남아 있었다).
       #
-      # 빼도 안전한 이유는 아래 세 조건이 이미 "지워도 되는 브랜치"를 정의하기 때문이다:
-      # 이 저장소에서 온 PR이고(fork 아님), head가 통합 브랜치도 `main`도 아니다.
+      # 그렇다고 base를 전혀 안 보진 않는다(2026-09-17, #103 — #102 리뷰 지적). head 세 조건만
+      # 으로는 `base=main`, `head=hotfix/x`처럼 **통합 브랜치를 건너뛰고 운영에 직접 머지되는
+      # PR**까지 걸러진다. 이런 PR은 애초에 `claude-review`/`enable-auto-merge`의 위험 경로
+      # 게이트를 안 타서(그쪽도 `base.ref == inputs.base-branch`로만 도니까) 사람이 직접 판단해
+      # 만든 예외 경로일 가능성이 크고, 머지 후에도 develop에 그대로 반영돼 있지 않을 수 있어
+      # 브랜치를 바로 지우면 나중에 develop로 포팅할 근거가 사라진다. 그래서 "base가 `main`인데
+      # base-branch는 `main`이 아닌" 조합만 따로 막는다 — base-branch 자체가 `main`인 저장소
+      # (통합 브랜치가 없는 저장소, 예: 이 저장소의 self-after-merge)에서는 그게 정상 경로이므로
+      # 그대로 지운다.
+      #
+      # 남는 조건들이 "지워도 되는 브랜치"를 정의한다: 이 저장소에서 온 PR이고(fork 아님),
+      # head가 통합 브랜치도 `main`도 아니며, 통합 브랜치를 건너뛴 운영 직행도 아니다.
       # 릴리스 PR(base=운영, head=통합)은 `head.ref != inputs.base-branch`가 그대로 막는다.
       - name: 머지된 작업 브랜치 삭제
         id: delete-branch
-        if: ${{ !cancelled() && github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref != inputs.base-branch && github.event.pull_request.head.ref != 'main' }}
+        if: ${{ !cancelled() && github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref != inputs.base-branch && github.event.pull_request.head.ref != 'main' && (github.event.pull_request.base.ref != 'main' || inputs.base-branch == 'main') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
