@@ -204,9 +204,18 @@ jobs:
             esac
           done
 
+      # **base가 통합 브랜치인지 보지 않는다(2026-09-17).** 예전엔 `base.ref == inputs.base-branch`
+      # 를 요구했는데, 그러면 **스택 PR의 head 브랜치가 영영 안 지워진다** — 스택된 PR의 base는
+      # 앞 PR의 브랜치라 이 조건이 거짓이기 때문이다. 스택이 표준 패턴이 된 지금은 쌓을 때마다
+      # 찌꺼기가 하나씩 남는다(2026-09-16 gh-workflows #88: `feat/release-by-tag`가 머지됐는데
+      # 그대로 남아 있었다).
+      #
+      # 빼도 안전한 이유는 아래 세 조건이 이미 "지워도 되는 브랜치"를 정의하기 때문이다:
+      # 이 저장소에서 온 PR이고(fork 아님), head가 통합 브랜치도 `main`도 아니다.
+      # 릴리스 PR(base=운영, head=통합)은 `head.ref != inputs.base-branch`가 그대로 막는다.
       - name: 머지된 작업 브랜치 삭제
         id: delete-branch
-        if: ${{ !cancelled() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == inputs.base-branch && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref != inputs.base-branch && github.event.pull_request.head.ref != 'main' }}
+        if: ${{ !cancelled() && github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref != inputs.base-branch && github.event.pull_request.head.ref != 'main' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
