@@ -31,7 +31,7 @@ jobs:
       actions: read
     uses: superokok/gh-workflows/.github/workflows/claude-agent.yml@main
     secrets: inherit
-    # 재사용 워크플로우의 기본값은 kitchen-tempo(Node + Prisma + Next.js) 기준이다.
+    # 재사용 워크플로우의 기본값은 원본 프로젝트(Node + Prisma + Next.js) 기준이다.
     # 이 저장소는 Spring Boot + Next.js + Expo라 **하나도 맞지 않는다** — 그런데
     # `with:`를 생략하면 그 기본값이 조용히 상속된다. 실제로 2026-09-12에 이슈 #7이
     # `npx prisma generate`에서 죽었다(prisma가 없으니 npx가 최신 rc를 받아왔고 거기엔

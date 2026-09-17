@@ -7,7 +7,7 @@ name: Template sync (reusable)
 # 소비 저장소에서 돌기 때문에 로컬 액션 참조조차 해석하지 못한다(PR #59·#62에서
 # startup_failure로 확인, 지금은 `scripts/lint-workflows.sh`가 그 형태를 막는다).
 # 복사가 유일한 수단이고, 복사본은 추적하지 않으면 반드시 드리프트한다 — 실측(2026-09-15):
-# kitchen-tempo와 devDepth의 훅 3종 210줄은 바이트 단위로 같았지만 `session-briefing.sh`는
+# 소비 저장소 두 곳의 훅 3종 210줄은 바이트 단위로 같았지만 `session-briefing.sh`는
 # 이미 30줄, `.claude/settings.json`은 8줄 갈라져 있었고, **같은 훅의 테스트가 두 벌**
 # (node 러너 / bash)로 따로 자라고 있었다.
 #
@@ -75,7 +75,7 @@ jobs:
       # **정본은 다른 저장소라 토큰을 따로 받는다.** 위 토큰은 `owner`/`repositories`가
       # 없으면 **이 저장소에만** 유효해서 정본 체크아웃이 404로 죽는다(2026-09-15 실측:
       # "Inputs 'owner' and 'repositories' are not set. Creating token for this
-      # repository (superokok/devDepth)" 직후 실패).
+      # repository (superokok/<repo>)" 직후 실패).
       #
       # 한 토큰에 `owner:`만 줘서 설치된 저장소 전부로 넓히는 방법도 있지만, 그러면 모든
       # 소비 저장소의 동기화 잡이 **소유자의 모든 저장소에 쓰기 권한**을 쥔다. 읽기 전용으로
@@ -128,7 +128,7 @@ jobs:
           # 권한과 링크 여부까지 정본이 정한다.
           #
           # `-p`가 필요한 이유: 예전엔 복사 뒤 `chmod +x`를 글롭으로 걸었는데, 그 글롭이
-          # **정본이 소유하지도 않는 파일까지** 건드렸다(2026-09-15 devDepth #40 실측:
+          # **정본이 소유하지도 않는 파일까지** 건드렸다(2026-09-15 한 소비 저장소 실측:
           # `session-briefing.sh`를 포함해 6개가 644→755 모드 변경만으로 diff에 들어왔다).
           # 동기화는 정본이 가진 것만 바꿔야 한다 — 실행 비트가 필요하면 정본에서 올린다.
           #
