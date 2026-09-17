@@ -15,21 +15,33 @@
 #     --production  <br>   운영 브랜치 (기본 main)
 #     --checks "a,b,c"     통합 브랜치의 필수 상태 체크
 #                          (기본 "check / check,review / review")
-#     --protect-production 운영 브랜치에도 PR 필수 보호를 건다
+#     --no-protect-production  운영 브랜치 보호를 걸지 않는다 (기본은 건다)
 #     --enforce-admins     관리자도 보호를 우회하지 못하게 한다 (아래 주의 참고)
 #     --dry-run            바꾸지 않고 무엇을 할지만 출력
 set -euo pipefail
 
 REPO=""; INTEGRATION="develop"; PRODUCTION="main"
 CHECKS="check / check,review / review"
-PROTECT_PROD=0; ENFORCE_ADMINS=false; DRY=0
+# **운영 브랜치 보호는 기본으로 건다(2026-09-17).** 예전엔 `--protect-production`을 줘야
+# 걸렸는데, `create-project.sh`가 그걸 안 넘겨서 **새 프로젝트의 운영 브랜치가 매번 무보호로
+# 나왔다**(2026-09-17 devDepth 실측: `main`에 보호가 아예 없었다).
+#
+# 위 머리말이 "브랜치 보호가 없으면 게이트 자체가 없는 것"이라고 적어두고 2026-09-10에 같은
+# 걸 감사에서 찾았다고까지 써놨는데, 정작 기본값은 꺼져 있었다 — 아는 것과 기본값으로 만드는
+# 것은 다르다.
+#
+# 공통 지침은 "모든 변경은 PR을 거친다 — 직접 커밋 예외는 없다"이고 훅이 그걸 막지만,
+# **훅은 각자의 로컬에만 있다.** 서버에서 강제하는 게 없으면 그 문장은 게이트가 아니다.
+PROTECT_PROD=1; ENFORCE_ADMINS=false; DRY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --integration) INTEGRATION="$2"; shift 2 ;;
     --production)  PRODUCTION="$2";  shift 2 ;;
     --checks)      CHECKS="$2";      shift 2 ;;
-    --protect-production) PROTECT_PROD=1; shift ;;
+    # 이제 기본이라 아무것도 안 한다 — 옛 호출부가 깨지지 않게 받아만 준다.
+    --protect-production)    PROTECT_PROD=1; shift ;;
+    --no-protect-production) PROTECT_PROD=0; shift ;;
     --enforce-admins)     ENFORCE_ADMINS=true; shift ;;
     --dry-run)     DRY=1; shift ;;
     -h|--help)     sed -n '1,25p' "$0"; exit 0 ;;
@@ -159,9 +171,14 @@ say "  ※ 재사용 워크플로우는 체크 이름이 '<호출 잡> / <불린
 
 if [ "$PROTECT_PROD" = 1 ]; then
   step "브랜치 보호 — $PRODUCTION"
-  # 운영 브랜치엔 필수 체크를 걸지 않는다. 릴리스 PR은 사람이 보고 머지하는 자리이고,
-  # 체크가 안 생기면 사람도 못 머지하게 되는 위험만 늘린다.
+  # **필수 체크는 걸지 않는다(`null`).** 릴리스 PR은 사람이 보고 머지하는 자리인데, 체크가
+  # 안 생기면 사람도 못 머지하게 되는 위험만 늘린다. 여기서 거는 건 **PR 필수 · force push
+  # 차단 · 삭제 차단** 셋이고, 그게 운영 브랜치에 필요한 전부다.
   protect "$PRODUCTION" "null" || true
+else
+  step "브랜치 보호 — $PRODUCTION (건너뜀)"
+  say "  --no-protect-production 이 주어져 운영 브랜치를 보호하지 않는다."
+  say "  ⚠️ 그러면 이 브랜치는 직접 push·force push·삭제가 전부 가능하다 — 릴리스 게이트가 없다."
 fi
 
 # ── 5. 사람이 해야 하는 것 ───────────────────────────────────────────────────
