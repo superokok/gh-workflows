@@ -26,8 +26,12 @@ name: Claude Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
+  # **이름이 실제 워크플로우와 정확히 같아야 한다.** 다르면 이 트리거가 영영 안 뜨고,
+  # 초록이 됐을 때 담당자를 붙이는 폴백이 통째로 죽는다 — 그런데 아무 신호도 안 난다
+  # (2026-09-17 실측: project-template의 CI 이름은 `Test`인데 여기 `CI`가 박혀 있었다).
+  # 리뷰보다 늦게 끝나는 체크를 내는 워크플로우를 전부 적는다.
   workflow_run:
-    workflows: ["CI"]
+    workflows: [{{CI_WORKFLOW_NAMES}}]
     types: [completed]
 
 jobs:

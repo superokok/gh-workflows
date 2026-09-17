@@ -326,11 +326,15 @@ jobs:
             # 같은 마커가 이미 있으면 다시 달지 않는다(push마다 재실행되므로).
             if ! gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body' \
                  | grep -qF '<!-- gate:risk-path -->'; then
+              # **여기서 `@핸들`을 붙이지 않는다.** 멘션은 watch 설정과 무관하게 메일을
+              # 만드는데, 이 스텝은 PR이 열리자마자 돈다 — 체크가 아직 도는 중이고 머지
+              # 버튼은 비활성이다. #55가 "담당자 지정"을 초록 시점으로 옮겼지만 **코멘트
+              # 안의 멘션은 그대로 남아 있어서**, 고친 경로 옆으로 같은 알림이 계속 새고
+              # 있었다(2026-09-17 실측: PR 생성 17초 뒤 멘션 메일, 체크는 그 뒤로 100초 더 돎).
+              # 이 코멘트는 **기록**이다 — 왜 자동 머지를 안 켰는지 남긴다.
+              # 사람을 부르는 건 초록이 된 뒤의 담당자 지정 하나로 일원화한다.
               {
-                if [ -n "$NOTIFY_HANDLE" ]; then
-                  printf '@%s\n\n' "$NOTIFY_HANDLE"
-                fi
-                printf '%s\n\n' '🔴 **머지 필요** `[AGENT-ACTION-REQUIRED]`'
+                printf '%s\n\n' '⏸️ **자동 머지를 켜지 않았습니다**'
                 if [ -n "$gate" ]; then
                   printf '%s\n\n' '**게이트가 약해졌을 수 있습니다.** 아래 변경은 검사를 통과시키는 게 아니라 *검사를 사라지게* 만들 수 있어서 이것만은 사람이 봐야 합니다 — 이 부류는 CI에서도 스테이징에서도 증상이 없습니다.'
                   printf '%s\n' "$gate"
@@ -340,6 +344,7 @@ jobs:
                   printf '%s\n\n' '위험 경로 파일이 바뀌어 자동 머지를 켜지 않았습니다 — diff를 보고 직접 Merge해주세요.'
                   printf '```\n%s\n```\n\n' "$risky"
                 fi
+                printf '%s\n' '체크가 전부 초록이 되면 담당자로 지정해 알려드립니다 — 그때 눌러주세요.'
                 printf '%s\n' '<!-- gate:risk-path -->'
               } | gh pr comment "$PR" --repo "$REPO" --body-file -
             fi
