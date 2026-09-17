@@ -74,10 +74,16 @@ load_env_file() {
     case "$line" in ''|'#'*) continue ;; esac
     key="${line%%=*}"
     val="${line#*=}"          # 값에 '='이 들어 있어도 첫 '='만 자른다(정규식·프롬프트가 그렇다)
-    # **CR을 떼어낸다.** 프로파일이 CRLF로 저장돼 있으면 값 끝에 ``이 붙고, 그게 렌더된
-    # YAML 안으로 들어가 **줄바꿈으로 해석된다** — 한 줄이어야 할 프롬프트가 두 줄로 쪼개져
-    # YAML 파싱이 깨진다(2026-09-16 실측: `develop/main` 자리에서 claude.yml이 무너졌다).
-    # 저장소에는 `.gitattributes`로 LF를 강제하지만, 사용자가 손으로 만든 프로파일은 그 밖이다.
+    # **CR을 떼어낸다.** 프로파일이 CRLF로 저장돼 있으면 값 끝에 CR 한 바이트가
+    # 남고, 그게 렌더된 YAML 안으로 들어가 **줄바꿈으로 해석된다** — 한 줄이어야 할
+    # 프롬프트가 두 줄이 되면서 YAML 파싱이 깨진다(2026-09-16 실측: "develop" 다음에
+    # CR이 붙어 "/main"이 다음 줄로 밀리면서 claude.yml이 무너졌다).
+    # 저장소에는 `.gitattributes`로 LF를 강제하지만, 손으로 만든 프로파일은 그 밖이다.
+    #
+    # 이 주석 자체가 한 번 깨져 있었다(2026-09-17 발견): 설명하려던 CR을 **주석 안에
+    # 리터럴로 적는 바람에** 줄이 쪼개져, 백틱이 명령 치환으로 열려 있었다. 파일 전체의
+    # 백틱 개수가 우연히 짝이 맞아 `bash -n`을 통과했을 뿐이다 — 주석에 한 줄을 더하는
+    # 것만으로 스크립트 전체가 문법 오류가 났다. 제어문자는 이름으로 적는다.
     key="${key%$'\r'}"
     val="${val%$'\r'}"
     V["$key"]="$val"
@@ -264,10 +270,69 @@ $TEMPLATE_REPO의 common/에서 온 것이다(template-sync.yml이 계속 동기
   cd - >/dev/null
 fi
 
+# ── 필수 체크: **지금 실제로 존재하는 것만 건다** ────────────────────────────
+#
+# `REQUIRED_CHECKS`에는 `ci.yml`이 내는 이름(`backend`·`web-and-app`·`check / check`)이
+# 들어 있는데, **`ci.yml`은 스켈레톤에 없다**(빌드 게이트는 스택이 소유한다). 그대로 걸면
+# 그 체크는 **영영 생기지 않고 영구 Pending으로 남아 첫 PR부터 머지가 막힌다** — 에이전트
+# 루프도 PR #1에서 그대로 멈춘다. devDepth가 2026-09-11에 정확히 이걸로 막혔고, 그 교훈이
+# CLAUDE.md에 적혀 있는데 **이 스크립트가 그걸 구조적으로 재현하고 있었다.**
+#
+# 그래서 렌더된 워크플로우가 **열린 PR에서 실제로 만드는** 체크만 걸고, 나머지는 `ci.yml`을
+# 쓴 뒤에 추가하도록 명령까지 찍어 준다.
+producible_checks() {
+  local dir="$1" f
+  for f in "$dir"/.github/workflows/*.yml; do
+    [ -e "$f" ] || continue
+    awk '
+      /^on:/ { inon = 1; next }
+      inon && /^[^[:space:]]/ { inon = 0 }
+      # `on:` 아래 2칸이 트리거 키다. pull_request 아래의 types만 봐야 한다 —
+      # 파일에 workflow_run(types: [completed])이 같이 있으면 그걸 보고 잘못 뺀다.
+      inon && /^  [a-z_]+:/ { inpr = ($0 ~ /^  pull_request:/); if (inpr) pr = 1 }
+      # types에 opened가 없으면 열린 PR에 체크를 만들지 않는다(after-merge의 [closed]).
+      inon && inpr && /types:/ && $0 !~ /opened/ { pr = 0 }
+      /^jobs:/ { injobs = 1; next }
+      injobs && /^  [A-Za-z_][A-Za-z0-9_-]*:[[:space:]]*$/ {
+        job = $1; sub(/:$/, "", job); n++; jobs[n] = job
+      }
+      injobs && /^[[:space:]]+uses:/ { reusable[job] = 1 }
+      END {
+        if (pr) for (i = 1; i <= n; i++)
+          print (reusable[jobs[i]] ? jobs[i] " / " jobs[i] : jobs[i])
+      }
+    ' "$f"
+  done
+}
+
+CHECKS_NOW=""; CHECKS_LATER=""
+if [ -n "${V[REQUIRED_CHECKS]:-}" ]; then
+  # 렌더 결과를 본다. dry-run이면 실제로 쓰지 않았으므로 임시로 한 번 더 렌더한다 —
+  # **dry-run에서도 "무엇이 걸리고 무엇이 안 걸리는지"가 보여야** 미리 알 수 있다.
+  _probe="$WORK/repo"
+  if [ ! -d "$_probe/.github/workflows" ]; then
+    _probe="$WORK/probe"; mkdir -p "$_probe"; render_into "$_probe" >/dev/null 2>&1 || true
+  fi
+  _have=$(producible_checks "$_probe")
+  _old_ifs="$IFS"; IFS=','
+  for _c in ${V[REQUIRED_CHECKS]}; do
+    IFS="$_old_ifs"
+    _c="${_c#"${_c%%[![:space:]]*}"}"; _c="${_c%"${_c##*[![:space:]]}"}"
+    [ -z "$_c" ] && continue
+    if printf '%s\n' "$_have" | grep -qxF "$_c"; then
+      CHECKS_NOW="${CHECKS_NOW:+$CHECKS_NOW,}$_c"
+    else
+      CHECKS_LATER="${CHECKS_LATER:+$CHECKS_LATER,}$_c"
+    fi
+    IFS=','
+  done
+  IFS="$_old_ifs"
+fi
+
 # ── 리포 설정 ────────────────────────────────────────────────────────────────
 step "리포 설정 (bootstrap-repo.sh에 위임)"
 BOOTSTRAP_ARGS=("$REPO" --integration "${V[INTEGRATION_BRANCH]}" --production "${V[PRODUCTION_BRANCH]}")
-[ -n "${V[REQUIRED_CHECKS]:-}" ] && BOOTSTRAP_ARGS+=(--checks "${V[REQUIRED_CHECKS]}")
+[ -n "$CHECKS_NOW" ] && BOOTSTRAP_ARGS+=(--checks "$CHECKS_NOW")
 [ "$DRY" = 1 ] && BOOTSTRAP_ARGS+=(--dry-run)
 bash "$SELF_DIR/bootstrap-repo.sh" "${BOOTSTRAP_ARGS[@]}" | sed 's/^/  /'
 
@@ -277,3 +342,15 @@ say "  2) Claude GitHub App 설치:  github.com/apps/claude → 이 저장소 �
 say "  3) 렌더된 호출부에서 확인:  risk-paths(위험 경로 정규식)와 verify(검증 명령)"
 say "     — 스택 기본값이라 이 프로젝트에 맞는지는 사람이 본다"
 say "  4) CI(ci.yml)는 스켈레톤에 없다 — 빌드 게이트는 스택이 소유한다"
+if [ -n "$CHECKS_LATER" ]; then
+  say ""
+  say "  ⚠️ 지금 필수로 걸지 '않은' 체크: $CHECKS_LATER"
+  say "     이 이름들은 아직 어떤 워크플로우도 만들지 않는다. 지금 걸면 영구 Pending으로"
+  say "     첫 PR부터 머지가 막힌다(devDepth 2026-09-11 실측). ci.yml을 쓰고 **PR에서 그"
+  say "     이름이 실제로 보이는 것을 확인한 뒤** 아래로 추가한다:"
+  say ""
+  say "       gh api -X PATCH repos/$REPO/branches/${V[INTEGRATION_BRANCH]}/protection/required_status_checks \\"
+  say "         -f 'contexts[]=<이름1>' -f 'contexts[]=<이름2>'"
+  say ""
+  say "     실제 이름 확인:  gh pr checks <PR번호> --repo $REPO"
+fi

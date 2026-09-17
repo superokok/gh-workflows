@@ -56,6 +56,14 @@ for prof in scripts/skeleton/profiles/*.env; do
   if bash scripts/create-project.sh --stack "$name" --render-only "$out" >/dev/null; then
     # 렌더된 결과도 actionlint에 태운다. 스켈레톤 원본은 자리표시자 때문에 그대로는 못 태우고,
     # 값이 들어간 뒤라야 진짜 워크플로우가 된다. `lint-workflows.sh`가 받아둔 바이너리를 쓴다.
+    # **브랜치 보호에 걸 이름이 실제로 만들어지는가.** 하나도 안 만들어지면 새 프로젝트는
+    # 첫 PR부터 영구 Pending으로 막힌다 — 그 상태는 "게이트가 엄격한 것"과 구별되지 않는다.
+    have=$(grep -lE '^\s*pull_request:' "$out"/.github/workflows/*.yml 2>/dev/null \
+             | xargs -r grep -hoE '^  [A-Za-z_][A-Za-z0-9_-]*:' | tr -d ' :' | sort -u)
+    if ! printf '%s\n' "$have" | grep -qx review; then
+      echo "::error::$name 프로파일에 열린 PR에서 도는 게이트(review)가 없다 — 필수 체크가 영구 Pending이 된다"
+      fail=1
+    fi
     if [ -x ./actionlint ] && ! ./actionlint "$out"/.github/workflows/*.yml; then
       echo "::error::$name 프로파일 렌더 결과가 actionlint를 통과하지 못했다"
       fail=1
