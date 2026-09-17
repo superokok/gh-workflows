@@ -29,9 +29,16 @@ name: Claude Review (reusable)
 # `review`는 2분 29초를 더 돎). `do-not-merge` 라벨은 상태("사람이 머지한다")이고
 # 담당자 지정은 실행 가능 시점("지금 눌러도 된다")이어야 한다 — 이 job이 이 저장소에서
 # 보통 가장 긴 체크라 마지막 스텝 시점엔 나머지가 대개 이미 초록이고, 이미 과금되는
-# job이라 추가 job 비용이 0이다. `mergeStateStatus`가 아직 `CLEAN`이 아니면 같은 스텝
-# 안에서 짧게 재확인한다(비동기 계산 — GitHub이 아직 판정 중일 수 있다).
+# job이라 추가 job 비용이 0이다.
 # CI가 리뷰보다 늦게 끝나는 PR을 위해 `notify-ready` job을 폴백으로 둔다(아래).
+#
+# 2026-09-16(#87): 초록 판정을 `mergeStateStatus == CLEAN`에서 **check-run 직접 확인**으로
+# 바꿨다. `review / review`는 보통 필수 체크인데 이 스텝이 그 job의 마지막 스텝이라, 도는
+# 동안에는 PR이 절대 CLEAN이 될 수 없다 — **자기가 끝나야 생기는 상태를 자기가 끝나기 전에
+# 기다리는 교착**이었다. 실측(#86): 90초 내내 `status=BLOCKED`로 돌다 포기했고, 폴백은 트리거인
+# `Lint`가 리뷰보다 먼저(6초 vs 8분 7초) 끝나 이미 스킵된 뒤라 두 경로가 다 막혔다. 라벨이
+# 붙고 체크가 전부 초록인데 담당자가 영영 안 붙었다. 이제 자기 run의 check-run을 제외하고
+# 나머지가 전부 성공인지만 본다 — GitHub의 비동기 계산에도, 폴백이 언제 도는지에도 기대지 않는다.
 #
 # 2026-09-14(#60): #55가 "CLEAN이면 담당자"만 만들고 "실패하면 담당자"를 없앴다 —
 # 체크가 실패한 PR은 영원히 CLEAN이 되지 않으므로 담당자도 알림도 영영 안 왔다
@@ -406,17 +413,64 @@ jobs:
           # 깨져도 SHA 마커(`gate:checks-red:$SHA`)가 이미 찍혀 **두 번째 알림이 안 나가**
           # 실패 목록이 반쪽짜리로 남았다. 이건 #55가 초록 쪽에서 고친 문제("머지 버튼이
           # 아직 비활성인 시점에 알림 도착")와 같은 병이고, 빨간 쪽만 안 고쳐져 있었다.
+          # **자기 자신은 판정에서 뺀다.**
+          #
+          # 이 스텝은 `review` job의 마지막 스텝이라, 도는 동안 `review / review` 체크는 계속
+          # pending이다. 그런데 그 체크는 보통 **필수 체크**라 PR이 CLEAN이 될 수 없다 —
+          # **자기가 끝나야 생기는 상태를 자기가 끝나기 전에 기다리는 교착**이었다.
+          # 2026-09-16 실측(이 저장소 #86): 90초 내내 `status=BLOCKED`로 돌다 포기했고, 폴백
+          # (`notify-ready`)은 트리거인 `Lint`가 리뷰보다 **먼저**(6초 vs 8분 7초) 끝나 이미
+          # 스킵된 뒤였다. 두 경로가 다 막혀 담당자가 영영 안 붙었다(라벨·초록인데 담당자 없음).
+          #
+          # 빨간불 판정(#66의 "안 끝난 체크가 있으면 미룬다")도 같은 이유로 자기 자신에 막혔다.
+          # 그래서 두 판정 모두 자기 run의 check-run을 제외한다. 이름이 아니라 `details_url`의
+          # run id로 거른다 — check-run 이름은 `<호출 job> / <불린 job>`이라 호출부마다 다르지만
+          # run id는 확실하다. 같은 run의 `notify-ready` 체크도 함께 빠진다.
+          SELF_RUN_MARK="/actions/runs/${GITHUB_RUN_ID}/"
+
+          # 거르는 일은 **셸에서** 한다(jq 안이 아니라). jq 표현식을 늘리면 문법 오류가 나도
+          # `2>/dev/null` 때문에 조용히 빈 결과가 되고, 그건 "판정할 게 없다"와 구별되지 않는다 —
+          # 이 워크플로우가 계속 고쳐온 실패 모드가 정확히 그것이다. `details_url`을 한 칸 더
+          # 뽑아 `grep -v`로 거르면 무엇이 빠졌는지 눈으로 확인할 수 있다.
+          check_runs_tsv() {
+            gh api "repos/$REPO/commits/$SHA/check-runs" --paginate 2>/dev/null \
+              | jq -s '[.[].check_runs[]]' 2>/dev/null \
+              | jq -r 'sort_by(.started_at) | reverse | group_by(.name) | .[] | .[0] |
+                       "\(.name)\t\(.conclusion // "")\t\(.started_at // "")\t\(.details_url // "")"' 2>/dev/null \
+              | grep -vF "$SELF_RUN_MARK"
+          }
+
+          # 자기 자신을 뺀 나머지 필수 체크가 전부 성공(또는 스킵)인가.
+          # 자기 체크는 이 스텝이 끝나는 순간 초록이 되는 게 확정이므로 빼도 판정이 정확하다.
+          # `mergeStateStatus`를 기다리지 않으므로 GitHub의 비동기 계산에도, 폴백이 언제 도는지에도
+          # 의존하지 않는다.
+          detect_green() {
+            [ -z "$required" ] && return 1
+            local runs; runs=$(check_runs_tsv)
+            [ -z "$runs" ] && return 1
+
+            local seen=0
+            while IFS=$'\t' read -r name conclusion _started _url; do
+              [ -z "$name" ] && continue
+              printf '%s\n' "$required" | grep -qxF "$name" || continue
+              seen=1
+              case "$conclusion" in
+                success|skipped|neutral) ;;
+                *) return 1 ;;
+              esac
+            done <<< "$runs"
+
+            [ "$seen" = "1" ]
+          }
+
           detect_red() {
             [ -z "$required" ] && return 1
-            runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate 2>/dev/null \
-                     | jq -s '[.[].check_runs[]]' 2>/dev/null \
-                     | jq -r 'sort_by(.started_at) | reverse | group_by(.name) | .[] | .[0] |
-                              "\(.name)\t\(.conclusion // "")\t\(.started_at // "")"' 2>/dev/null)
+            runs=$(check_runs_tsv)
             [ -z "$runs" ] && return 1
 
             local now_ts; now_ts=$(date -u +%s)
             detail=""; pending=""
-            while IFS=$'\t' read -r name conclusion started; do
+            while IFS=$'\t' read -r name conclusion started _url; do
               [ -z "$name" ] && continue
               printf '%s\n' "$required" | grep -qxF "$name" || continue
               case "$conclusion" in
@@ -486,7 +540,10 @@ jobs:
             has_dnm=$(printf '%s' "$info" | jq -r '[.labels[].name] | any(. == "do-not-merge")' 2>/dev/null)
             already_assigned=$(printf '%s' "$info" | jq -r --arg h "$NOTIFY_HANDLE" '[.assignees[].login] | any(. == $h)' 2>/dev/null)
 
-            if [ "$mergeable" = "MERGEABLE" ] && [ "$status" = "CLEAN" ]; then
+            # 초록 판정은 **check-run으로** 한다(detect_green). `status == CLEAN`은 이 job이
+            # 끝나야 나오는 값이라 여기서 기다리면 교착이다(위 주석). `mergeable`만 본다 —
+            # 충돌이 있으면 초록이라고 부를 수 없고, 그건 이 job과 무관하게 계산된다.
+            if [ "$mergeable" != "CONFLICTING" ] && detect_green; then
               if [ "$has_dnm" != "true" ]; then
                 echo "do-not-merge 아님 — auto-merge 대상이라 담당자 알림이 필요 없다"; exit 0
               fi
@@ -494,7 +551,7 @@ jobs:
                 echo "이미 담당자 — 중복 알림 방지, 스킵"; exit 0
               fi
               assign_notify "$PR"
-              echo "담당자 지정함 (mergeable=$mergeable, status=$status)"
+              echo "담당자 지정함 (자기 체크 제외 전부 초록, mergeable=$mergeable, status=$status)"
               exit 0
             fi
 
@@ -672,14 +729,19 @@ jobs:
           # 이 폴백은 워크플로우가 끝날 때마다 깨어나므로, 미뤄도 마지막 하나가 끝나는 실행에서
           # 판정된다. 영구 Pending만 STALE_PENDING_MIN분으로 빠져나간다(같은 함수 주석 참고).
           STALE_PENDING_MIN=30
+          # `review` job과 같은 이유로 **자기 run의 check-run을 뺀다** — 이 job도 PR에
+          # `review / notify-ready`라는 체크로 보고되므로, 빼지 않으면 자기가 pending이라
+          # "아직 도는 체크가 있다"로 매번 판정을 미룬다(그 주석 참고).
+          SELF_RUN_MARK="/actions/runs/${GITHUB_RUN_ID}/"
           runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate 2>/dev/null \
                    | jq -s '[.[].check_runs[]]' 2>/dev/null \
                    | jq -r 'sort_by(.started_at) | reverse | group_by(.name) | .[] | .[0] |
-                            "\(.name)\t\(.conclusion // "")\t\(.started_at // "")"' 2>/dev/null)
+                            "\(.name)\t\(.conclusion // "")\t\(.started_at // "")\t\(.details_url // "")"' 2>/dev/null \
+                   | grep -vF "$SELF_RUN_MARK")
 
           now_ts=$(date -u +%s)
           detail=""; pending=""
-          while IFS=$'\t' read -r name conclusion started; do
+          while IFS=$'\t' read -r name conclusion started _url; do
             [ -z "$name" ] && continue
             printf '%s\n' "$required" | grep -qxF "$name" || continue
             case "$conclusion" in
