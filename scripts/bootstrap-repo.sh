@@ -24,7 +24,7 @@ REPO=""; INTEGRATION="develop"; PRODUCTION="main"
 CHECKS="check / check,review / review"
 # **운영 브랜치 보호는 기본으로 건다(2026-09-17).** 예전엔 `--protect-production`을 줘야
 # 걸렸는데, `create-project.sh`가 그걸 안 넘겨서 **새 프로젝트의 운영 브랜치가 매번 무보호로
-# 나왔다**(2026-09-17 devDepth 실측: `main`에 보호가 아예 없었다).
+# 나왔다**(2026-09-17 한 소비 저장소 실측: `main`에 보호가 아예 없었다).
 #
 # 위 머리말이 "브랜치 보호가 없으면 게이트 자체가 없는 것"이라고 적어두고 2026-09-10에 같은
 # 걸 감사에서 찾았다고까지 써놨는데, 정작 기본값은 꺼져 있었다 — 아는 것과 기본값으로 만드는
@@ -93,7 +93,7 @@ LABELS
 step "저장소 머지 설정"
 # `delete_branch_on_merge`는 **반드시 꺼둔다.** 그 설정은 머지된 PR의 head 브랜치를 무조건
 # 지워서, `develop`→`main` 릴리스 PR을 머지하는 순간 **`develop` 자체가 삭제된다**
-# (2026-09-05 kitchen-tempo에서 실제로 겪고 복구함). 브랜치 정리는 `after-merge.yml`이
+# (2026-09-05 한 소비 저장소에서 실제로 겪고 복구함). 브랜치 정리는 `after-merge.yml`이
 # base와 이름을 보고 안전하게 한다.
 if run gh api -X PATCH "repos/$REPO" \
   -F allow_auto_merge=true \

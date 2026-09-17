@@ -39,7 +39,7 @@ jobs:
     # 호출부가 권한을 명시해야 한다. 안 그러면 호출부 job의 토큰 권한이 저장소 기본값이라
     # `id-token: write`가 없고, 불린 워크플로우가 그걸 요구하는 순간 job이 시작도 못 하고
     # `startup_failure`로 죽는다 — 로그도 check-run도 남지 않아 auto-merge가 "리뷰 없음"으로
-    # 영원히 대기한다(kitchen-tempo 2026-09-07 실제 사고).
+    # 영원히 대기한다(2026-09-07 실제 사고).
     permissions:
       contents: read
       pull-requests: write
