@@ -50,7 +50,13 @@ run()  { if [ "$DRY" = 1 ]; then printf '  [dry-run] %s\n' "$*"; else "$@" >/dev
 
 command -v gh >/dev/null 2>&1 || { echo "gh CLI가 필요합니다." >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "gh 인증이 필요합니다: gh auth login" >&2; exit 1; }
-gh repo view "$REPO" >/dev/null 2>&1 || { echo "저장소를 찾을 수 없습니다: $REPO" >&2; exit 1; }
+# **dry-run은 저장소가 없어도 끝까지 돈다.** dry-run의 목적은 "만들기 전에 무엇이 일어나는지
+# 보는 것"인데, 여기서 막으면 정작 새 저장소를 만들 때 **리허설이 불가능하다** —
+# `create-project.sh --new --dry-run`이 파일 렌더까지만 보여주고 리포 설정·남은 안내를
+# 통째로 건너뛰었다(2026-09-17 실측). 실제로 바꿀 때만 존재를 요구한다.
+if [ "$DRY" = 0 ] && ! gh repo view "$REPO" >/dev/null 2>&1; then
+  echo "저장소를 찾을 수 없습니다: $REPO" >&2; exit 1
+fi
 
 say "대상: $REPO   통합=$INTEGRATION  운영=$PRODUCTION"
 [ "$DRY" = 1 ] && say "(dry-run — 아무것도 바꾸지 않습니다)"
