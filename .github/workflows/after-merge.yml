@@ -564,8 +564,10 @@ jobs:
           for n in $targets; do
             # 라벨이 없는 저장소도 있다(`scripts/bootstrap-repo.sh`가 만든다). 실패해도
             # 멈추지 않되 흔적은 남긴다 — 라벨이 없으면 멱등성만 잃고 알림은 그대로 간다.
+            label_failed=0
             if ! err=$(gh pr edit "$n" --repo "$REPO" --add-label needs-rebase 2>&1); then
               echo "::warning title=needs-rebase 라벨 부착 실패::PR #${n}: ${err}"
+              label_failed=1
             fi
             if ! err=$(gh pr edit "$n" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>&1); then
               echo "::warning title=담당자 지정 실패::PR #${n}에 @${NOTIFY_HANDLE} 지정 실패 — 충돌 알림이 사람에게 닿지 않았을 수 있다: ${err}"
@@ -574,7 +576,11 @@ jobs:
               printf '@%s\n\n' "$NOTIFY_HANDLE"
               printf '%s\n\n' "⚠️ **머지 충돌** \`[AGENT-ACTION-REQUIRED]\` — #${MERGED_PR}이 \`${BASE}\`에 머지되면서 이 PR이 충돌 상태가 됐습니다."
               printf '%s\n\n' "충돌은 체크를 빨갛게 만들지 않아서 auto-merge가 **조용히** 멈춥니다. 자동 리베이스는 하지 않습니다 — 리뷰 중인 커밋을 기계가 다시 쓰면 고친 것이 사라질 수 있어, 어느 쪽을 살릴지는 diff를 본 사람이 정해야 합니다."
-              printf '%s\n' "해소하면 다음 머지 때 \`needs-rebase\` 라벨이 자동으로 떨어집니다."
+              if [ "$label_failed" = "1" ]; then
+                printf '%s\n' "⚠️ \`needs-rebase\` 라벨 부착에도 실패했습니다 — 이 라벨이 멱등 표식이라, 다음 머지 때마다 이 알림이 반복될 수 있습니다."
+              else
+                printf '%s\n' "해소하면 다음 머지 때 \`needs-rebase\` 라벨이 자동으로 떨어집니다."
+              fi
             } | gh pr comment "$n" --repo "$REPO" --body-file -
             echo "#$n 충돌 — 라벨·담당자·코멘트 완료"
           done
