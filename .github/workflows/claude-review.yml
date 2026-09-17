@@ -639,11 +639,23 @@ jobs:
   # 경우엔(위 job이 이미 처리했음) 초반 체크에서 바로 종료하므로 멱등하고 비용도 거의 0이다.
   #
   # 호출부가 이 폴백을 쓰려면 `on:`에 `workflow_run: {workflows: [...], types:
-  # [completed]}`를 추가해야 한다(README "호출부" 참고). **`review` job 자신의 죽음까지
-  # 잡으려면 그 목록에 이 워크플로우 자신의 `name`(예: "Claude Review")도 넣어야 한다** —
-  # 안 넣으면 CI 실패는 잡아도 리뷰 자신의 startup_failure는 아무도 감지하지 못한다.
-  # 그 파일은 **default 브랜치에 있는 버전이 돈다** — 새로 추가한 직후에는 release 전까지
-  # 효력이 없다.
+  # [completed]}`를 추가해야 한다(README "호출부" 참고). 그 파일은 **default 브랜치에 있는
+  # 버전이 돈다** — 새로 추가한 직후에는 release 전까지 효력이 없다.
+  #
+  # ⚠️ **그 목록에 이 워크플로우 자신의 `name`은 넣지 않는다.** 2026-09-14까지 여기엔
+  # "`review` job 자신의 죽음까지 잡으려면 자기 이름도 넣어라"고 적혀 있었다. `self-review.yml`
+  # 에서 실제로 넣어봤다가 **자기 참조가 워크플로우 파일을 무효로 만들어 GitHub 파서가
+  # 거부했다**(PR #63). run이 생성되지 않으니 필수 체크 `review / review`가 영구 Pending으로
+  # 남아 PR이 머지 불가로 굳는다. **`actionlint`는 통과시킨다** — GitHub 자체 검증만 잡는
+  # 종류라 `scripts/lint-workflows.sh`로도 안 걸린다.
+  #
+  # 애초에 논리도 성립하지 않았다: 파일이 무효면 run이 없으니 자기를 감시할 수 없고,
+  # `workflow_run`은 **default 브랜치에서만** 발동하므로 PR 브랜치의 startup_failure는
+  # 어차피 잡지 못한다.
+  #
+  # `review` job 자신의 죽음은 **다른 워크플로우**가 본다 — `claude-fix` 호출부의
+  # `workflows:` 목록에 이 워크플로우의 `name`을 넣는다(자기 참조가 아니라 유효하다).
+  # 이 저장소가 `self-fix.yml`로 하는 것이 그것이다.
   #
   # **이 job에는 `github.actor != 'dependabot[bot]'`를 걸지 않는다.** `review` job의 그 필터는
   # 기술적 제약이다 — Dependabot이 낸 `pull_request` 실행에는 Dependabot secrets만 들어와
