@@ -547,8 +547,12 @@ jobs:
           RETRY_COUNT=7
           RETRY_INTERVAL_SEC=15
           for i in $(seq 1 "$RETRY_COUNT"); do
-            # 비어 있었으면 다시 읽는다 — 채워지는 데 몇 초 걸릴 수 있다.
-            [ -z "$required" ] && required=$(read_required)
+            # **매 시도마다 무조건 다시 읽는다.** "비어 있을 때만 다시 읽는다"였던
+            # 이전 버전은 `statusCheckRollup`이 완전히 빈 게 아니라 **일부만** 채워진
+            # 채로 첫 응답이 오면, 그 부분 목록이 `[ -z "$required" ]`를 통과하지 못해
+            # 그대로 최종값으로 굳었다 — 이후 나머지 6번의 재시도 내내 실제보다 적은
+            # 필수 체크 목록으로 초록/빨간불을 판정하게 된다(#96, PR #95 리뷰 지적).
+            required=$(read_required)
             info=$(gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus,labels,assignees 2>/dev/null)
             mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
             status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
@@ -737,13 +741,19 @@ jobs:
           # 있고, 이 폴백은 트리거 워크플로우가 끝나는 순간 깨어나므로 정확히 그 구간에
           # 걸린다. 2026-09-17 devDepth #49 실측: 여기서 한 번 읽고 비어 있다는 이유로
           # 즉시 빠져나가 **주 경로·폴백이 둘 다 죽었다**(라벨·초록인데 담당자 없음).
+          #
+          # **비어 있지 않다고 바로 멈추지 않는다 — 3번 다 읽고 마지막 값을 쓴다.**
+          # 예전엔 첫 응답이 비어 있지만 않으면(=일부만 채워졌어도) 그 자리서 멈췄다.
+          # 그러면 그 부분 목록이 그대로 최종값이 되어 이후 판정이 실제보다 적은 필수
+          # 체크 목록으로 이뤄진다 — `review` job과 같은 문제(#96, PR #95 리뷰 지적).
+          # 이 폴백은 트리거당 한 번만 돌아 판정 기회가 다시 없으므로, 조금 늦더라도
+          # 매번 최신값으로 덮어써 목록이 다 채워질 시간을 벌어준다.
           required=""
-          for _ in 1 2 3; do
+          for i in 1 2 3; do
             required=$(gh pr view "$num" --repo "$REPO" --json statusCheckRollup \
                          --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
                          | sort -u)
-            [ -n "$required" ] && break
-            sleep 10
+            [ "$i" -lt 3 ] && sleep 10
           done
           if [ -z "$required" ]; then
             echo "::warning title=체크 목록이 비어 있다::PR #${num}의 statusCheckRollup을 30초 동안 읽지 못했다 — 판정을 못 해 담당자 알림이 나가지 않는다."
