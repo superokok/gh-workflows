@@ -36,6 +36,7 @@ SKELETON="$SELF_DIR/skeleton"
 TEMPLATE_REPO="${TEMPLATE_REPO:-superokok/project-template}"
 
 REPO=""; STACK="next-vercel"; PROFILE=""; NEW=0; DRY=0; RENDER_ONLY=""; FORCE_RENDER=0
+ALLOW_NO_NOTIFY=0
 declare -a SKIP=()
 NO_COMMON=0
 declare -a OVERRIDES=()
@@ -47,6 +48,7 @@ while [ $# -gt 0 ]; do
     --set)         OVERRIDES+=("$2"); shift 2 ;;
     --new)         NEW=1; shift ;;
     --render-only) RENDER_ONLY="$2"; shift 2 ;;
+    --allow-no-notify) ALLOW_NO_NOTIFY=1; shift ;;
     --force-render) FORCE_RENDER=1; shift ;;
     --skip)        SKIP+=("$2"); shift 2 ;;
     --no-common)   NO_COMMON=1; shift ;;
@@ -97,6 +99,27 @@ load_env_file "$STACK_PROFILE"
 for kv in ${OVERRIDES+"${OVERRIDES[@]}"}; do
   V["${kv%%=*}"]="${kv#*=}"
 done
+# ── 알림 핸들이 비어 있으면 여기서 멈춘다 ───────────────────────────────────
+#
+# 빈 값이면 호출부 4곳의 `notify-handle`이 전부 비고, 담당자 지정 스텝의
+# `if: inputs.notify-handle != ''`가 거짓이 되어 **사람을 부르는 경로가 통째로 skipped**가
+# 된다 — 게이트 약화도, 빨간불도, 머지 충돌도 아무도 안 불린다.
+#
+# 그리고 **그게 조용하다.** 사람이 필요 없는 PR에서는 증상이 전혀 없고, 사람이 필요한
+# 첫 PR에서야 드러나는데 그때도 "알림이 안 온다"가 아니라 "아무 일도 안 일어난다"로 보인다.
+# 2026-09-17 superokok/devDepth를 이 상태로 만들었다 — 프로파일 주석에 "비우면 알림이
+# 꺼진다"고 **적혀만 있고 강제되지 않았다.** 적어두는 것과 막는 것은 다르다.
+# `--render-only`는 저장소를 만들지 않는다 — 렌더 결과만 보는 검사(check-skeleton.sh)라
+# 여기서 막으면 게이트 자신이 못 돈다. 실제로 저장소를 세우는 경로에만 건다.
+if [ -z "$RENDER_ONLY" ] && [ -z "${V[NOTIFY_HANDLE]:-}" ] && [ "$ALLOW_NO_NOTIFY" = 0 ]; then
+  echo "NOTIFY_HANDLE이 비어 있습니다 — 이대로 만들면 사람을 부르는 경로가 전부 꺼집니다." >&2
+  echo "  (게이트 약화 감지 · 필수 체크 빨간불 · 머지 충돌 — 셋 다 아무도 안 불립니다)" >&2
+  echo "" >&2
+  echo "  핸들을 주세요:  --set NOTIFY_HANDLE=<GitHub 핸들>" >&2
+  echo "  정말 알림 없이 만들려면:  --allow-no-notify" >&2
+  exit 2
+fi
+
 # 저장소 이름은 인자에서 온다 — 프로파일에 적을 값이 아니다.
 [ -n "$REPO" ] && [ -z "${V[PROJECT_NAME]:-}" ] && V[PROJECT_NAME]="${REPO#*/}"
 [ -z "${V[PROJECT_NAME]:-}" ] && V[PROJECT_NAME]="project"
@@ -352,7 +375,9 @@ bash "$SELF_DIR/bootstrap-repo.sh" "${BOOTSTRAP_ARGS[@]}" | sed 's/^/  /'
 
 step "남은 것 — 사람이 해야 한다"
 say "  1) 에이전트 App 자격증명:  scripts/sync-secrets.sh $REPO"
-say "  2) Claude GitHub App 설치:  github.com/apps/claude → 이 저장소 추가"
+say "  2) Claude GitHub App — **All repositories로 설치돼 있으면 할 일이 없다.**"
+say "     확인: 첫 PR의 review 잡에서 'Run anthropics/claude-code-action@v1'이 success인지 본다."
+say "     안 돼 있으면 github.com/apps/claude → 이 저장소 추가."
 say "  3) 렌더된 호출부에서 확인:  risk-paths(위험 경로 정규식)와 verify(검증 명령)"
 say "     — 스택 기본값이라 이 프로젝트에 맞는지는 사람이 본다"
 say "  4) CI(ci.yml)는 스켈레톤에 없다 — 빌드 게이트는 스택이 소유한다"
