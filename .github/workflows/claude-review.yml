@@ -393,9 +393,22 @@ jobs:
           # 대신 PR에 **보고된 체크 전체**를 본다 — 권한이 필요 없고, 이 저장소들에는
           # 자문용 체크가 없어서 "실패한 체크가 있으면 사람이 봐야 한다"가 그대로 성립한다.
           # 비필수 체크를 추가하게 되면 이 가정을 다시 검토한다.
-          required=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup \
-                       --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
-                       | sort -u)
+          #
+          # **매 시도마다 다시 읽는다.** 예전엔 스텝 시작에 한 번만 읽었는데,
+          # `statusCheckRollup`은 PR 생성 직후 **비어 있을 수 있다**(GitHub이 아직 채우는
+          # 중). 그러면 `detect_green`·`detect_red`가 둘 다 `[ -z "$required" ]`에서
+          # 즉시 빠져나가 **7번의 시도가 전부 죽은 판정이 된다** — 로그에는 "아직 판정 불가"만
+          # 남아서 "체크가 안 끝났다"와 구별되지 않는다.
+          # 2026-09-17 devDepth #49 실측: 리뷰가 13초 만에 끝나 스텝이 PR 생성 13초 뒤에
+          # 시작했고, 그때 목록이 비어 있어 **전부 초록인데 담당자가 영영 안 붙었다.**
+          # 리뷰가 오래 걸리는 PR에서는 우연히 목록이 차 있어 동작해서, 빠른 PR에서만
+          # 조용히 실패했다.
+          read_required() {
+            gh pr view "$PR" --repo "$REPO" --json statusCheckRollup \
+              --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
+              | sort -u
+          }
+          required=$(read_required)
 
           # 아직 결론이 안 난 체크가 이만큼 오래 멈춰 있으면 "영영 안 끝난다"로 보고 기다리지 않는다.
           # 이 탈출구가 없으면 영구 Pending 체크 하나가 빨간불 알림을 영원히 묻는다(호출부가 겪은
@@ -534,6 +547,8 @@ jobs:
           RETRY_COUNT=7
           RETRY_INTERVAL_SEC=15
           for i in $(seq 1 "$RETRY_COUNT"); do
+            # 비어 있었으면 다시 읽는다 — 채워지는 데 몇 초 걸릴 수 있다.
+            [ -z "$required" ] && required=$(read_required)
             info=$(gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus,labels,assignees 2>/dev/null)
             mergeable=$(printf '%s' "$info" | jq -r '.mergeable // ""' 2>/dev/null)
             status=$(printf '%s' "$info" | jq -r '.mergeStateStatus // ""' 2>/dev/null)
@@ -601,6 +616,12 @@ jobs:
           done
 
           TOTAL_WAIT_SEC=$(( (RETRY_COUNT - 1) * RETRY_INTERVAL_SEC ))
+          # **빈 체크 목록은 "정상"과 구별되지 않는다.** 그대로 두면 알림이 조용히 사라지고,
+          # 로그만 봐서는 "아직 안 끝났다"로 읽힌다 — 이 워크플로우가 반복해서 겪은 실패
+          # 모드가 정확히 그것이다. 소리를 낸다.
+          if [ -z "$required" ]; then
+            echo "::warning title=체크 목록을 끝내 읽지 못했다::PR #${PR}의 statusCheckRollup이 ${TOTAL_WAIT_SEC}초 동안 비어 있었다 — 초록/빨간불 판정을 아예 못 했다. 담당자 알림이 나가지 않았을 수 있다."
+          fi
           echo "${TOTAL_WAIT_SEC}초 내 CLEAN도 빨간불도 확정되지 않음 — notify-ready(폴백)가 다시 판정한다"
           exit 0
 
@@ -712,10 +733,22 @@ jobs:
 
           # 판정 대상 체크 목록. 브랜치 보호 API를 쓰지 않는 이유는 `review` job의 같은
           # 부분 주석 참고(admin 권한 필요 → App 토큰으로 404, PR #63).
-          required=$(gh pr view "$num" --repo "$REPO" --json statusCheckRollup \
-                       --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
-                       | sort -u)
-          if [ -z "$required" ]; then echo "체크 목록이 비어 있음 — 빨간불 판정 보류"; exit 0; fi
+          # **비어 있으면 몇 번 더 읽는다.** `statusCheckRollup`은 채워지는 데 몇 초 걸릴 수
+          # 있고, 이 폴백은 트리거 워크플로우가 끝나는 순간 깨어나므로 정확히 그 구간에
+          # 걸린다. 2026-09-17 devDepth #49 실측: 여기서 한 번 읽고 비어 있다는 이유로
+          # 즉시 빠져나가 **주 경로·폴백이 둘 다 죽었다**(라벨·초록인데 담당자 없음).
+          required=""
+          for _ in 1 2 3; do
+            required=$(gh pr view "$num" --repo "$REPO" --json statusCheckRollup \
+                         --jq '.statusCheckRollup[]? | (.name // .context) // empty' 2>/dev/null \
+                         | sort -u)
+            [ -n "$required" ] && break
+            sleep 10
+          done
+          if [ -z "$required" ]; then
+            echo "::warning title=체크 목록이 비어 있다::PR #${num}의 statusCheckRollup을 30초 동안 읽지 못했다 — 판정을 못 해 담당자 알림이 나가지 않는다."
+            exit 0
+          fi
 
           # claude-fix.yml이 아직 재시도 중이면 양보한다 — 자동 복구가 사람 호출보다 먼저다.
           comments=$(gh pr view "$num" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null)
