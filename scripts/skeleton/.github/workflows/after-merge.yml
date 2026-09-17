@@ -45,10 +45,14 @@ jobs:
       # `enable-auto-merge`·`claude-review`·`claude-fix`와 **같은 값**이어야 한다 —
       # 한 곳만 빠지면 그 경로의 알림만 조용히 사라진다(#31 실측).
       notify-handle: {{NOTIFY_HANDLE}}
+      # 릴리스에 마이그레이션이 **실제로 들어 있을 때만** 경고와 `has-migration` 라벨을
+      # 붙인다. 머지 게이트(`risk-paths`)에서 마이그레이션을 뺀 대신 검사를 여기로 옮긴 것이다
+      # — 사람이 실제로 판단하는 자리가 여기다. 마이그레이션이 없는 프로젝트는 빈 값이면 된다.
+      migration-paths: '{{MIGRATION_PATHS}}'
       # ⚠️ 이 안내문은 `release-pr.yml`에도 **같은 내용으로** 들어 있다. 그쪽은 수동 재생성
       # 창구라 같은 PR 본문이 나와야 하는데, GitHub Actions에는 파일 간 YAML 앵커가 없어
       # 복제 말고는 방법이 없다. 한쪽을 고치면 다른 쪽도 고친다.
       pre-merge-note: |
-        `main` 머지는 **운영 반영**입니다 — 백엔드는 Oracle Cloud VM, 웹은 Vercel입니다(`DEPLOY.md`). 머지 전에 이 릴리스에 Flyway 마이그레이션이 들어 있는지 확인하세요: 들어 있으면 운영 DB 스키마가 같이 바뀝니다.
+        `{{PRODUCTION_BRANCH}}` 머지는 **운영 반영**입니다 — 배포 대상은 `DEPLOY.md`를 보세요.
 
-        **머지 방식: Create a merge commit(병합 머지)** — squash/rebase 아님. `develop`은 이미 PR당 1커밋이라 여기서 또 squash하면 PR 단위 추적이 깨집니다.
+        **머지 방식: Create a merge commit(병합 머지)** — squash/rebase 아님. `{{INTEGRATION_BRANCH}}`는 이미 PR당 1커밋이라 여기서 또 squash하면 PR 단위 추적이 깨집니다.
