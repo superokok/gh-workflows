@@ -11,7 +11,7 @@ name: Enable auto-merge
 #    **check-run 이름 규칙이 두 가지라 섞이기 쉽다.** 재사용 워크플로우를 부르면
 #    `<호출 잡> / <불린 잡>`이 되고(`review / review`), **job을 인라인으로 정의하면 job
 #    이름 그대로**다(`backend` — 워크플로우 이름은 안 붙는다). `CI / backend`로 잡았다가
-#    PR이 영구 Pending으로 막힌 적이 있다(devDepth, 2026-09-11). 실제 이름은 PR의 체크
+#    PR이 영구 Pending으로 막힌 적이 있다(2026-09-11 실측). 실제 이름은 PR의 체크
 #    목록이나 `repos/{r}/commits/{sha}/check-runs`로 확인한다.
 #  - required로는 **`pull_request`로 도는 것만** 넣는다. 안 도는 워크플로우를 넣으면 그
 #    체크가 영구 Pending으로 남아 머지를 영영 막는다(job이 `skip`되는 건 `success` 취급이라

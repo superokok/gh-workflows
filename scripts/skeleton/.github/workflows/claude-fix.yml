@@ -3,7 +3,7 @@ name: Claude Fix (red build → 수정 커밋)
 # 자가 치유 게이트. 로직은 superokok/gh-workflows의 claude-fix.yml에 있다 —
 # 이 프로젝트는 트리거와 **이 스택 고유의 값**만 갖는다.
 #
-# kitchen-tempo와 달리 "Preview Smoke"가 없다 — 이 저장소에는 Vercel 프리뷰가 없어서
+# 이 스켈레톤에는 "Preview Smoke"가 없다 — 이 저장소에는 Vercel 프리뷰가 없어서
 # preview-smoke.yml을 쓰지 않는다. 여기 없는 워크플로우 이름을 적어두면 영원히 매칭되지
 # 않을 뿐이라 해롭진 않지만, 실제로 있는 것만 적는다.
 #
@@ -30,7 +30,7 @@ jobs:
     uses: superokok/gh-workflows/.github/workflows/claude-fix.yml@main
     secrets: inherit
     # claude-agent.yml과 같은 이유로 명시한다 — 재사용 워크플로우의 기본값은
-    # kitchen-tempo(Node + Prisma + Next.js) 기준이고, `with:`를 생략하면 그게 조용히
+    # 원본 프로젝트(Node + Prisma + Next.js) 기준이고, `with:`를 생략하면 그게 조용히
     # 상속된다. claude-agent가 2026-09-12에 그 상속으로 `npx prisma generate`에서 죽었다.
     # claude-fix는 빨간불이 나야 깨어나므로 아직 드러나지 않았을 뿐 같은 구멍이었다.
     with:
