@@ -36,6 +36,11 @@ on:
 
 permissions:
   contents: write
+  # 아래 "소비 저장소에 무엇이 나갔는지 남긴다" 스텝이 `gh pr comment`를 쓴다. 이게 없으면
+  # GraphQL `addComment`가 `Resource not accessible by integration`으로 죽고, **태그는 이미
+  # 옮겨진 뒤라 릴리스는 성공했는데 run만 빨간불**이 된다(2026-09-17 #95 릴리스 실측).
+  # 성공을 실패로 보고하는 게 나쁜 이유는 단순하다 — 몇 번 반복되면 빨간불을 안 보게 된다.
+  pull-requests: write
 
 jobs:
   release:
