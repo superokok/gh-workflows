@@ -248,6 +248,78 @@ jobs:
             echo "게이트 약화 없음 — 자동 머지 경로로 간다"
           fi
 
+      # ── 열릴 때부터 충돌인 PR도 부른다 ────────────────────────────────────────
+      #
+      # `after-merge`에 "이 머지로 충돌하게 된 PR에 사람을 부른다"가 이미 있는데, 그건
+      # **머지 이벤트에만 돈다.** 그래서 **머지가 끝난 뒤에 열린 PR이 이미 충돌 상태면
+      # 아무도 안 부른다** — 그 뒤로 머지가 없으면 다시 볼 기회조차 없다.
+      #
+      # 2026-09-17 실측: #104가 06:16에 머지되고 #105가 06:43에 그 위에서 열렸는데(브랜치를
+      # `origin/main`이 아닌 다른 브랜치에서 딴 실수), 열릴 때부터 CONFLICTING이었다.
+      # 라벨도 담당자도 안 붙었고 **사용자가 PR 목록을 직접 보고 발견했다.**
+      #
+      # 충돌은 체크를 빨갛게 만들지 않는다 — `mergeable`이 CONFLICTING이 될 뿐이라
+      # auto-merge가 조용히 안 켜지고, 그 침묵은 "아직 검사 중"과 구별되지 않는다.
+      - name: 열릴 때부터 충돌이면 사람을 부른다
+        id: conflict
+        if: ${{ !cancelled() && inputs.notify-handle != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ inputs.base-branch }}
+          NOTIFY_HANDLE: ${{ inputs.notify-handle }}
+        run: |
+          set +e
+          set -o pipefail
+
+          # GitHub은 `mergeable`을 **비동기로** 계산한다. PR이 막 열린 직후에는 거의 항상
+          # UNKNOWN이고, 그때 판정하면 충돌을 통째로 놓친다. UNKNOWN인 동안만 다시 묻는다 —
+          # 보통 몇 초면 끝나므로 평소 비용은 API 호출 한 번이다.
+          RETRY_COUNT=6
+          RETRY_INTERVAL_SEC=5
+          for i in $(seq 1 "$RETRY_COUNT"); do
+            info=$(gh pr view "$PR" --repo "$REPO" --json mergeable,labels,assignees 2>/dev/null)
+            mergeable=$(printf '%s' "$info" | jq -r '.mergeable // "UNKNOWN"' 2>/dev/null)
+            [ "$mergeable" != "UNKNOWN" ] && break
+            echo "mergeable 계산 대기 중 (시도 $i/$RETRY_COUNT)"
+            [ "$i" -lt "$RETRY_COUNT" ] && sleep "$RETRY_INTERVAL_SEC"
+          done
+
+          has_label=$(printf '%s' "$info" | jq -r '[.labels[].name] | any(. == "needs-rebase")' 2>/dev/null)
+
+          # 충돌이 풀렸으면 라벨을 뗀다. 안 떼면 낡은 라벨이 남아 다음 충돌 때 "이미 알렸다"로
+          # 판정돼 **진짜 충돌이 조용해진다**(`after-merge`의 같은 스텝과 같은 이유).
+          if [ "$mergeable" = "MERGEABLE" ] && [ "$has_label" = "true" ]; then
+            gh pr edit "$PR" --repo "$REPO" --remove-label needs-rebase >/dev/null 2>&1 \
+              && echo "충돌 해소됨 — needs-rebase 제거"
+            exit 0
+          fi
+
+          if [ "$mergeable" != "CONFLICTING" ]; then
+            echo "충돌 아님 (mergeable=$mergeable)"; exit 0
+          fi
+
+          # 라벨이 곧 멱등 표식이다. push마다 이 스텝이 다시 도는데, 같은 충돌로 매번
+          # 부르면 그 알림은 읽히지 않게 된다.
+          if [ "$has_label" = "true" ]; then
+            echo "이미 needs-rebase — 중복 알림 방지, 스킵"; exit 0
+          fi
+
+          if ! err=$(gh pr edit "$PR" --repo "$REPO" --add-label needs-rebase 2>&1); then
+            echo "::warning title=needs-rebase 라벨 부착 실패::PR #${PR}: ${err}"
+          fi
+          if ! err=$(gh pr edit "$PR" --repo "$REPO" --add-assignee "$NOTIFY_HANDLE" 2>&1); then
+            echo "::warning title=담당자 지정 실패::PR #${PR}에 @${NOTIFY_HANDLE} 지정 실패 — 충돌 알림이 사람에게 닿지 않았을 수 있다: ${err}"
+          fi
+          {
+            printf '@%s\n\n' "$NOTIFY_HANDLE"
+            printf '%s\n\n' "⚠️ **머지 충돌** \`[AGENT-ACTION-REQUIRED]\` — 이 PR은 \`${BASE}\`와 충돌한 상태로 열렸습니다."
+            printf '%s\n\n' '충돌은 체크를 빨갛게 만들지 않아서 auto-merge가 **조용히** 멈춥니다. 자동 리베이스는 하지 않습니다 — 리뷰 중인 커밋을 기계가 다시 쓰면 고친 것이 사라질 수 있어, 어느 쪽을 살릴지는 diff를 본 사람이 정해야 합니다.'
+            printf '%s\n' '해소하고 push하면 `needs-rebase` 라벨이 자동으로 떨어집니다.'
+          } | gh pr comment "$PR" --repo "$REPO" --body-file -
+          echo "충돌 — 라벨·담당자·코멘트 완료"
+
       - name: 위험 경로면 사람에게, 아니면 auto-merge 켜기
         env:
           # PAT를 쓴다 — GITHUB_TOKEN으로 켠 auto-merge가 수행하는 머지는 그 결과 push가
