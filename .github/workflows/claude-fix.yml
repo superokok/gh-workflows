@@ -78,6 +78,19 @@ jobs:
     # 실행에는 시크릿이 안 와서 App 토큰 발급부터 죽는다(`claude-review.yml`의 같은 조건
     # 주석 참고). 고칠 수도 없으면서 빨간불만 남기는 실행을 아예 깨우지 않는다.
     # 의존성 PR의 빨간불은 사람이 본다 — 버전을 내리든 닫든 판단이 필요한 종류다.
+    #
+    # **취소된 배포는 실패가 아니다.** Vercel은 취소도 `state=failure`로 보고하고, 구별되는
+    # 정보는 `description`에만 있다(2026-09-18 실측 페이로드:
+    # `state=failure  description="Canceled from the Vercel Dashboard"`).
+    # 배포는 새 커밋·환경변수 변경·수동 취소로 **일상적으로** 취소되는데, 그걸 빨간불로 보면
+    # 자동 수정이 고칠 것도 없는 걸 고치려 들고 **시도 상한(2회)을 헛되이 태운다.**
+    # 소진되면 `do-not-merge`가 붙어 사람에게 넘어간다 — 아무 문제가 없었는데도.
+    # (같은 날 kitchen-tempo #247 실측: 같은 초에 취소 status가 두 번 와서 2회를 한꺼번에 썼다.)
+    #
+    # `contains`는 대소문자를 구분하지 않으므로 `cancel`만 보면 `Canceled`·`cancelled`·
+    # `The deployment was canceled` 같은 변형이 전부 걸린다. 벤더 문구에 기대는 게 마음에
+    # 들진 않지만, 이 조건은 이미 `context == 'Vercel'`로 벤더에 묶인 **배포 배관**이고
+    # 상태 코드만으로는 원리적으로 구별이 안 된다.
     if: >-
       github.actor != 'dependabot[bot]' &&
       ((github.event_name == 'workflow_run' &&
@@ -85,7 +98,8 @@ jobs:
        github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.head_repository.full_name == github.repository) ||
       (github.event_name == 'status' && github.event.context == 'Vercel' &&
-       (github.event.state == 'failure' || github.event.state == 'error')))
+       (github.event.state == 'failure' || github.event.state == 'error') &&
+       !contains(github.event.description, 'cancel')))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
