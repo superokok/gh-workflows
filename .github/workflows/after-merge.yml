@@ -190,6 +190,29 @@ jobs:
           issues=$(printf '%s' "$BODY" \
                      | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' \
                      | grep -oE '[0-9]+' | sort -u || true)
+          # **키워드가 없을 때만** 맨몸 `#N`도 본다 — 단, `agent` 라벨이 붙은 열린 이슈만.
+          #
+          # 에이전트에게 본문에 `Closes #N`을 적으라고 이미 지시하는데(claude-agent.yml), 실제로는
+          # `(#109)`·`PR #117`처럼 키워드 없이 적는 일이 생긴다. 그러면 GitHub도 위 정규식도 못
+          # 닫고 이슈가 열린 채 남는다. devDepth에서 2026-09-30 하루에 세 번 일어났고
+          # (#109·#112·#118), 그중 둘은 **콘텐츠 루프를 조용히 멈췄다** — 스카우트 가드가 열린
+          # 콘텐츠 이슈를 보고 건너뛰기 때문이다. 지시를 더 강하게 쓰는 것은 답이 아니다(이미
+          # 적혀 있다) — 모델 준수에 기대지 않는 자리로 옮긴다.
+          #
+          # 라벨 조건이 안전장치다: 사람이 만든 이슈나 PR 번호를 실수로 닫지 않는다. 그리고 이
+          # 판정이 틀려도 **스스로 낫는다** — 지도 노드 이슈를 너무 일찍 닫으면 그 노드가 아직
+          # 안 쓰였으므로 다음 스카우트 실행이 같은 이슈를 다시 연다.
+          if [ -z "$issues" ]; then
+            bare=$(printf '%s' "$BODY" | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
+            for i in $bare; do
+              labels=$(gh issue view "$i" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+              case ",$labels," in
+                *,agent,*) issues="$issues $i"; echo "bare ref #$i - agent 라벨이 있어 닫는다" ;;
+                *)         echo "bare ref #$i - agent 라벨이 없어 건너뛴다" ;;
+              esac
+            done
+          fi
+
           if [ -z "$issues" ]; then echo "PR #$PR 본문에 연결된 이슈 없음 — 스킵"; exit 0; fi
 
           for i in $issues; do
