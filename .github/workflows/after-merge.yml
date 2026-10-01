@@ -202,12 +202,39 @@ jobs:
           # 라벨 조건이 안전장치다: 사람이 만든 이슈나 PR 번호를 실수로 닫지 않는다. 그리고 이
           # 판정이 틀려도 **스스로 낫는다** — 지도 노드 이슈를 너무 일찍 닫으면 그 노드가 아직
           # 안 쓰였으므로 다음 스카우트 실행이 같은 이슈를 다시 연다.
+          # 라벨만으로는 안전하지 않다(#113, PR #112 리뷰 지적): `gh issue view`는 PR
+          # 번호도 그대로 해석하고(이슈·PR은 번호를 공유) 열림 상태도 보지 않는다. 본문이
+          # 예시로 `PR #117`을 인용하거나(실제로 PR #112 본문이 자기 자신의 번호 #112를
+          # 그런 식으로 포함했다) 이 PR 자신의 번호를 담고 있으면, 그 번호가 OPEN 이슈처럼
+          # 같이 닫힐 수 있었다. 그래서 자기 자신 번호는 먼저 걸러내고, REST API로 PR
+          # 여부와 상태(open)를 라벨과 함께 한 번에 확인한다.
           if [ -z "$issues" ]; then
             bare=$(printf '%s' "$BODY" | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
             for i in $bare; do
-              labels=$(gh issue view "$i" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+              if [ "$i" = "$PR" ]; then
+                echo "bare ref #$i - 이 PR 자신의 번호 — 건너뛴다"
+                continue
+              fi
+              info=$(gh api "repos/$REPO/issues/$i" \
+                       --jq '{state: .state, is_pr: (.pull_request != null), labels: [.labels[].name] | join(",")}' \
+                       2>/dev/null || echo "")
+              if [ -z "$info" ]; then
+                echo "bare ref #$i - 조회 실패 — 건너뛴다"
+                continue
+              fi
+              is_pr=$(printf '%s' "$info" | jq -r '.is_pr')
+              state=$(printf '%s' "$info" | jq -r '.state')
+              labels=$(printf '%s' "$info" | jq -r '.labels')
+              if [ "$is_pr" = "true" ]; then
+                echo "bare ref #$i - 이슈가 아니라 PR — 건너뛴다"
+                continue
+              fi
+              if [ "$state" != "open" ]; then
+                echo "bare ref #$i - 이슈가 open이 아님($state) — 건너뛴다"
+                continue
+              fi
               case ",$labels," in
-                *,agent,*) issues="$issues $i"; echo "bare ref #$i - agent 라벨이 있어 닫는다" ;;
+                *,agent,*) issues="$issues $i"; echo "bare ref #$i - open 이슈 + agent 라벨 — 닫는다" ;;
                 *)         echo "bare ref #$i - agent 라벨이 없어 건너뛴다" ;;
               esac
             done
