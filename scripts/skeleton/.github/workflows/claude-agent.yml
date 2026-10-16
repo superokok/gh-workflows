@@ -29,7 +29,7 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: superokok/gh-workflows/.github/workflows/claude-agent.yml@main
+    uses: superokok/gh-workflows/.github/workflows/claude-agent.yml@v1
     secrets: inherit
     # 재사용 워크플로우의 기본값은 원본 프로젝트(Node + Prisma + Next.js) 기준이다.
     # 이 저장소는 Spring Boot + Next.js + Expo라 **하나도 맞지 않는다** — 그런데

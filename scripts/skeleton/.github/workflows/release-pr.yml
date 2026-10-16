@@ -17,7 +17,7 @@ on:
 
 jobs:
   release-pr:
-    uses: superokok/gh-workflows/.github/workflows/release-pr.yml@main
+    uses: superokok/gh-workflows/.github/workflows/release-pr.yml@v1
     secrets: inherit
     with:
       # ⚠️ 이 안내문은 `after-merge.yml`에도 **같은 내용으로** 들어 있다(평소 경로가 그쪽이라

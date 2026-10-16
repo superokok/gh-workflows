@@ -29,7 +29,7 @@ jobs:
       contents: write        # delete-branch
       pull-requests: write   # merged-notice 코멘트
       issues: write          # close-issues
-    uses: superokok/gh-workflows/.github/workflows/after-merge.yml@main
+    uses: superokok/gh-workflows/.github/workflows/after-merge.yml@v1
     secrets: inherit
     with:
       # 운영 브랜치. 비워두면 릴리스 PR 스텝 자체가 안 돈다(통합 브랜치가 없는 저장소용

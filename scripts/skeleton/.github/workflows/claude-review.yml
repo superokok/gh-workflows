@@ -45,7 +45,7 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-    uses: superokok/gh-workflows/.github/workflows/claude-review.yml@main
+    uses: superokok/gh-workflows/.github/workflows/claude-review.yml@v1
     secrets: inherit
     with:
       # 담당자 지정은 여기(초록일 때 붙임)와 enable-auto-merge(뗌)가 짝을 이룬다

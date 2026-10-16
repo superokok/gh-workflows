@@ -13,6 +13,8 @@
 
 @.claude/common/work-loop.md
 
+> 새 프로젝트다 — 스택·DB·배포·인증·콘텐츠·수익 구조를 정하기 전에 `.claude/common/playbook.md`를 읽는다.
+
 ---
 
 ## ✅ 자동으로 진행해도 되는 것
