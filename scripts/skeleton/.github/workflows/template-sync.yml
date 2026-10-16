@@ -25,7 +25,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: superokok/gh-workflows/.github/workflows/template-sync.yml@main
+    uses: superokok/gh-workflows/.github/workflows/template-sync.yml@v1
     secrets: inherit
     with:
       base-branch: {{INTEGRATION_BRANCH}}

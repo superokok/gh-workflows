@@ -27,7 +27,7 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: superokok/gh-workflows/.github/workflows/claude-fix.yml@main
+    uses: superokok/gh-workflows/.github/workflows/claude-fix.yml@v1
     secrets: inherit
     # claude-agent.yml과 같은 이유로 명시한다 — 재사용 워크플로우의 기본값은
     # 원본 프로젝트(Node + Prisma + Next.js) 기준이고, `with:`를 생략하면 그게 조용히

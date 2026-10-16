@@ -225,7 +225,7 @@ on:
     branches: [develop, main]
 jobs:
   check:
-    uses: superokok/gh-workflows/.github/workflows/check.yml@main
+    uses: superokok/gh-workflows/.github/workflows/check.yml@v1
     secrets: inherit
 ```
 
@@ -272,7 +272,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-    uses: superokok/gh-workflows/.github/workflows/enable-auto-merge.yml@main
+    uses: superokok/gh-workflows/.github/workflows/enable-auto-merge.yml@v1
     secrets: inherit
     with:
       risk-paths: '^(prisma/|package\.json$|\.github/workflows/|\.env|Dockerfile|...)'
@@ -310,7 +310,7 @@ jobs:
     permissions:
       contents: read
       deployments: read
-    uses: superokok/gh-workflows/.github/workflows/preview-smoke.yml@main
+    uses: superokok/gh-workflows/.github/workflows/preview-smoke.yml@v1
     secrets: inherit
 ```
 
@@ -318,13 +318,13 @@ jobs:
 
 | 호출부 파일 | `uses:` | 트리거 |
 |---|---|---|
-| `after-merge.yml` | `after-merge.yml@main` (릴리스 PR도 여기서 — 입력 `release-target`: 운영 브랜치(보통 `main`), `pre-merge-note`: 프로젝트별 안내 마크다운, `notify-handle`: 충돌한 PR에 부를 사람) | `pull_request: {types: [closed]}` |
-| `claude-review.yml` | `claude-review.yml@main` | `pull_request: {types: [opened, synchronize, ready_for_review, reopened]}` — `notify-handle`을 쓰면 `workflow_run: {workflows: ["<그 저장소 CI 워크플로우의 name>"], types: [completed]}`도 같은 `on:`에 추가한다(`notify-ready` job의 폴백 트리거, 아래 "알아둘 것" 참고). ⚠️ **목록에 이 워크플로우 자신의 `name`은 넣지 않는다** — 자기 참조는 워크플로우 파일을 무효로 만들어 run이 아예 안 생기고, 필수 체크 `review / review`가 영구 Pending으로 굳는다(#63 실측. `actionlint`는 통과시킨다). `review` job 자신의 죽음은 **`claude-fix` 쪽** `workflows:` 목록에 이 이름을 넣어서 본다 — 이 저장소가 `self-fix.yml`로 하는 것이 그것이다. ⚠️ **이름은 그 저장소의 실제 워크플로우 `name`과 정확히 같아야 한다** — 안 맞으면 트리거가 한 번도 안 뜨는데 **아무 신호도 나지 않는다**(project-template에 `"CI"`로 박혀 있었으나 실제 이름은 `Test`였다, 2026-09-17 발견) |
-| `claude-agent.yml` | `claude-agent.yml@main` | `issues: {types: [labeled]}` |
-| `claude-fix.yml` | `claude-fix.yml@main` | `workflow_run: {workflows: ["<그 저장소 CI의 name>", "<리뷰 호출부의 name>"], types: [completed]}` + `status:`. ⚠️ **리뷰 호출부의 `name`을 이 목록에 넣는다** — `claude-review`는 자기 자신을 감시할 수 없으므로(위 행의 ⚠️) `review` job의 startup_failure는 **여기서만** 잡힌다. 이 저장소가 `self-fix.yml`로 하는 것이 그것이다. `base-branch` 입력(기본값 `"develop"`)을 통합 브랜치에 맞게 넘긴다 — 안 넘기면 `base=main`인 저장소에서는 대상 PR을 영원히 못 찾는다(#60) |
-| `preview-smoke.yml` | `preview-smoke.yml@main` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
-| `release-pr.yml` | `release-pr.yml@main` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
-| `template-sync.yml` | `template-sync.yml@main` | `schedule:` (주 1회 권장) + `workflow_dispatch:`. 입력 `base-branch`(PR의 base), `template-repo-name`(기본 `project-template` — 소유자는 소비 저장소와 같다고 본다), `template-ref`, `sync-branch` |
+| `after-merge.yml` | `after-merge.yml@v1` (릴리스 PR도 여기서 — 입력 `release-target`: 운영 브랜치(보통 `main`), `pre-merge-note`: 프로젝트별 안내 마크다운, `notify-handle`: 충돌한 PR에 부를 사람) | `pull_request: {types: [closed]}` |
+| `claude-review.yml` | `claude-review.yml@v1` | `pull_request: {types: [opened, synchronize, ready_for_review, reopened]}` — `notify-handle`을 쓰면 `workflow_run: {workflows: ["<그 저장소 CI 워크플로우의 name>"], types: [completed]}`도 같은 `on:`에 추가한다(`notify-ready` job의 폴백 트리거, 아래 "알아둘 것" 참고). ⚠️ **목록에 이 워크플로우 자신의 `name`은 넣지 않는다** — 자기 참조는 워크플로우 파일을 무효로 만들어 run이 아예 안 생기고, 필수 체크 `review / review`가 영구 Pending으로 굳는다(#63 실측. `actionlint`는 통과시킨다). `review` job 자신의 죽음은 **`claude-fix` 쪽** `workflows:` 목록에 이 이름을 넣어서 본다 — 이 저장소가 `self-fix.yml`로 하는 것이 그것이다. ⚠️ **이름은 그 저장소의 실제 워크플로우 `name`과 정확히 같아야 한다** — 안 맞으면 트리거가 한 번도 안 뜨는데 **아무 신호도 나지 않는다**(project-template에 `"CI"`로 박혀 있었으나 실제 이름은 `Test`였다, 2026-09-17 발견) |
+| `claude-agent.yml` | `claude-agent.yml@v1` | `issues: {types: [labeled]}` |
+| `claude-fix.yml` | `claude-fix.yml@v1` | `workflow_run: {workflows: ["<그 저장소 CI의 name>", "<리뷰 호출부의 name>"], types: [completed]}` + `status:`. ⚠️ **리뷰 호출부의 `name`을 이 목록에 넣는다** — `claude-review`는 자기 자신을 감시할 수 없으므로(위 행의 ⚠️) `review` job의 startup_failure는 **여기서만** 잡힌다. 이 저장소가 `self-fix.yml`로 하는 것이 그것이다. `base-branch` 입력(기본값 `"develop"`)을 통합 브랜치에 맞게 넘긴다 — 안 넘기면 `base=main`인 저장소에서는 대상 PR을 영원히 못 찾는다(#60) |
+| `preview-smoke.yml` | `preview-smoke.yml@v1` | `pull_request: {types: [opened, synchronize, reopened, ready_for_review]}` |
+| `release-pr.yml` | `release-pr.yml@v1` — **수동 재생성 창구로만** 남긴다 (평소 경로는 `after-merge.yml`) | `workflow_dispatch:` **only** — `push:`를 걸면 같은 사건에 잡이 둘이 된다 |
+| `template-sync.yml` | `template-sync.yml@v1` | `schedule:` (주 1회 권장) + `workflow_dispatch:`. 입력 `base-branch`(PR의 base), `template-repo-name`(기본 `project-template` — 소유자는 소비 저장소와 같다고 본다), `template-ref`, `sync-branch` |
 
 ### 리뷰를 건너뛰는 곳
 
@@ -611,8 +611,28 @@ UNKNOWN이 남아 있는 동안만 최대 6회(10초 간격) 다시 물어본다
   `self-after-merge`는 `head.repo.full_name == github.repository`로 막아 뒀다 — 안 막으면
   외부 PR마다 App 토큰 발급부터 실패해 **리뷰는 한 줄도 못 하면서 빨간불과 분만** 나간다.
   `self-lint`는 시크릿이 필요 없어 외부 PR에서도 그대로 돈다.
-- 태그가 아니라 `@main`으로 고정해 두면 고친 즉시 모든 프로젝트에 반영된다. 반대로 한 곳의
-  실수가 모든 프로젝트를 멈출 수 있으니, 큰 변경은 한 프로젝트에서 `@<sha>`로 먼저 확인한다.
+- 소비 프로젝트는 전부 **`@v1`**로 부른다(아래 "배포 — `v1` 태그"). `main`에 머지한 것은 `v1`을
+  옮기기 전까지 아무 프로젝트에도 닿지 않는다 — 큰 변경은 한 프로젝트에서 `@<sha>`로 먼저 확인한
+  뒤 `v1`을 옮긴다.
+
+## 배포 — `v1` 태그
+
+**모든 호출부는 `@v1`이다.** `v1`은 GitHub Actions 관례(`actions/checkout@v4`)와 같은 **움직이는
+메이저 태그**다. 2026-10-16 이전엔 `@main`과 `@v1`이 섞여 있었고 `v1`이 `main`보다 14커밋 뒤처져
+있었다 — 같은 공통 워크플로를 저장소마다 다른 버전으로 돌리고 있었다.
+
+`main`에 머지한 변경을 소비 프로젝트에 내보내려면 **사람이** `v1`을 옮긴다(강제 push라 에이전트
+훅이 막는다 — 에이전트는 아래 명령을 안내만 한다):
+
+```bash
+git fetch origin && git tag -f v1 origin/main && git push -f origin v1
+git ls-remote origin refs/tags/v1 refs/heads/main   # 두 SHA가 같은지 확인
+```
+
+- **입력값을 깨는 변경**(입력 삭제·이름 변경·기본값 의미 변경)이면 `v1`을 옮기지 않고 `v2`를 새로
+  만든 뒤 소비 프로젝트 호출부를 하나씩 옮긴다 — `v1`을 옮기는 순간 모든 저장소가 한꺼번에 깨진다.
+- 옮기기 전에 소비 프로젝트가 쓰는 입력이 그대로인지 본다:
+  `git diff v1 origin/main -- .github/workflows`.
 
 ## 이 저장소 자신 (`self-*.yml`)
 
@@ -716,7 +736,7 @@ ref로 소비되는 저장소는 배포가 따로 없다 — 소비자가 핀을
 소비 프로젝트는 `develop`(통합) / `main`(운영) 둘이지만, **이 저장소는 `main` 하나다.**
 의도된 선택이다.
 
-- 소비 프로젝트가 `@main`으로 고정해 부르므로 **`main`이 곳 배포본**이다. 그 앞에
+- 소비 프로젝트는 `@v1`로 부르고 **`v1`을 옮기는 것이 배포**다(위 "배포 — `v1` 태그"). 그 앞에
   `develop`을 두면 아무도 참조하지 않는 브랜치가 하나 생길 뿐이다 — 막아주는 게 없는데
   안전하다는 느낌만 준다
 - `develop`의 존재 이유는 스테이징 배포 대상(Vercel Preview·staging)인데 여긴 배포가 없다

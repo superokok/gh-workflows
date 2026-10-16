@@ -29,7 +29,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-    uses: superokok/gh-workflows/.github/workflows/enable-auto-merge.yml@main
+    uses: superokok/gh-workflows/.github/workflows/enable-auto-merge.yml@v1
     secrets: inherit
     with:
       # 담당자 지정 — 코멘트·리뷰 알림은 설정에서 끌 수 있고(gh-workflows #46 실측)
