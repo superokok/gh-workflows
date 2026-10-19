@@ -211,10 +211,11 @@ cat <<EOF
   5) Vercel: 프로젝트 연결, $INTEGRATION → staging 도메인,
        Deployment Protection → Protection Bypass for Automation (위 3번 시크릿)
 
-  6) 파일은 이 스크립트가 건드리지 않습니다. 이 루프를 이미 쓰는 저장소에서
-     가져오세요:
+  6) 파일은 이 스크립트가 건드리지 않습니다 — create-project.sh를 썼다면 이미 깔려 있다.
+     bootstrap-repo.sh만 단독으로 썼다면 이 루프를 이미 쓰는 저장소에서 가져오세요:
        .github/workflows/  (호출부 — 트리거·권한·risk-paths는 프로젝트마다 다릅니다)
-       .claude/settings.json, .claude/hooks/**, .claude/skills/steward
+       .claude/settings.json(훅 등록 — 없으면 훅 파일이 있어도 하나도 안 돈다),
+       .claude/hooks/**, .claude/skills/steward
        ※ vitest.config의 include에 '.claude/hooks/*.test.ts'를 넣으세요.
           빠뜨리면 훅 회귀 테스트가 **조용히 안 돕니다**.
 EOF
