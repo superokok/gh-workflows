@@ -17,7 +17,8 @@
 - 브랜치: `develop`(통합) / `main`(운영). 작업은 항상 `origin/develop`에서 딴 브랜치에서
 - 검증 커맨드 — 기본값은 Node 기준(`npm run typecheck` / `test` / `lint`)이지만 전부
   커맨드 문자열 입력이라 스택에 매이지 않는다. 툴체인도 선택값이다(아래 `ci.yml`)
-- Vercel Preview (커밋 status `Vercel`) — 없으면 `check.yml`만 쓰고 auto-merge는 안 쓰는 편이 낫다
+- **웹 프로젝트면** Vercel Preview(커밋 status `Vercel`)를 머지 게이트에 넣고 `preview-smoke`를 쓴다. 앱 전용처럼
+  프리뷰 배포가 없는 프로젝트(예: dotlog)는 `check`·`review`만으로 게이트를 구성한다(`--stack bare`)
 - **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
   auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
 - 라벨 `do-not-merge`, `agent` (`review-followup` · `followup-pr`은 워크플로우가 알아서 만든다)
@@ -74,7 +75,7 @@ scripts/create-project.sh <owner/repo> --stack next-vercel --set NOTIFY_HANDLE=<
 |---|---|---|
 | 1. 로직 | 여기 재사용 워크플로우 8개 | `uses:`로 부르면 끝 |
 | 2. 호출부 | 소비 프로젝트 `.github/workflows/` | **복사 + 조정** (트리거·권한·`risk-paths`는 프로젝트마다 다르다) |
-| 3. 에이전트 | `.claude/settings.json` · `hooks/**` · `skills/steward` | **복사**(`create-project.sh`: settings.json은 스켈레톤, 나머지는 정본 `common/`). **settings.json이 없으면 훅 파일이 있어도 하나도 안 돈다**(2026-10-19 dotlog 첫 생성 때 실제로 빠졌다). `vitest.config`의 include에 `.claude/hooks/*.test.ts`를 넣는 것을 잊지 말 것 — 빠뜨리면 훅 회귀 테스트가 **조용히 안 돈다** |
+| 3. 에이전트 | `.claude/settings.json` · `hooks/**` · `skills/steward` · 훅 테스트 | **정본 `project-template`의 `common/`에서 복사 + 매주 동기화**(`create-project.sh`가 처음 한 번 깔고, 이후 `template-sync`). settings.json(훅 등록)도 2026-10-19부터 여기 포함 — 예전엔 이 저장소 스켈레톤이 한 번만 깔아서, 공통 훅이 늘어도 기존 저장소 등록이 안 따라왔다. 훅 테스트(`scripts/hooks/run-tests.sh`)는 그 저장소의 테스트 명령 안에서 돌게 감싼다 — 안 감싸면 CI에서 **조용히 안 돈다** |
 | 4. 리포 설정 | 라벨 · auto-merge · 브랜치 보호 | **복사 불가** → `bootstrap-repo.sh` |
 | 5. 자격증명 | App 시크릿 · Claude 토큰 | **복사 불가** → `sync-secrets.sh` |
 
@@ -105,9 +106,11 @@ head 브랜치를 무조건 지워서, `develop`→`main` 릴리스 PR을 머지
 삭제된다**(2026-09-05 한 소비 저장소에서 실제로 겪고 복구함). 브랜치 정리는 `after-merge.yml`이
 base와 이름을 보고 안전하게 한다.
 
-> **템플릿 저장소로 굳히는 건 아직이다.** 표본이 한 프로젝트뿐이라, 무엇이 진짜 공통이고
-> 무엇이 그 프로젝트 전용(Vercel·Neon·Prisma·Capacitor, 스킬 4개 중 3개)인지 아직 못 가린다.
-> 두 번째 프로젝트를 실제로 붙여보고 그 경계를 근거로 굳힌다.
+> **공통과 프로젝트 전용의 경계**(2026-10-19, 소비 저장소 3개 — kitchen-tempo·dev-depth·dotlog 기준):
+> 루프 로직은 이 저장소(`@v1` 참조), 저장소에 파일로 있어야 하는 것(지침·플레이북·훅·훅 등록·스킬·훅
+> 테스트)은 `project-template`의 `common/`(동기화), 호출부·`CLAUDE.md` 뼈대는 이 저장소 스켈레톤(한 번
+> 렌더 후 프로젝트 소유), `ci.yml`·스택(Vercel·Neon·Prisma 등)·도메인 규칙은 각 프로젝트 소유다.
+> 새 프로젝트를 시작하는 절차 자체는 `project-template` 플레이북 맨 앞이 정본이다.
 
 ## 에이전트 자격증명 — GitHub App
 
