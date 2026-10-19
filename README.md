@@ -74,7 +74,7 @@ scripts/create-project.sh <owner/repo> --stack next-vercel --set NOTIFY_HANDLE=<
 |---|---|---|
 | 1. 로직 | 여기 재사용 워크플로우 8개 | `uses:`로 부르면 끝 |
 | 2. 호출부 | 소비 프로젝트 `.github/workflows/` | **복사 + 조정** (트리거·권한·`risk-paths`는 프로젝트마다 다르다) |
-| 3. 에이전트 | `.claude/settings.json` · `hooks/**` · `skills/steward` | **복사**. `vitest.config`의 include에 `.claude/hooks/*.test.ts`를 넣는 것을 잊지 말 것 — 빠뜨리면 훅 회귀 테스트가 **조용히 안 돈다** |
+| 3. 에이전트 | `.claude/settings.json` · `hooks/**` · `skills/steward` | **복사**(`create-project.sh`: settings.json은 스켈레톤, 나머지는 정본 `common/`). **settings.json이 없으면 훅 파일이 있어도 하나도 안 돈다**(2026-10-19 dotlog 첫 생성 때 실제로 빠졌다). `vitest.config`의 include에 `.claude/hooks/*.test.ts`를 넣는 것을 잊지 말 것 — 빠뜨리면 훅 회귀 테스트가 **조용히 안 돈다** |
 | 4. 리포 설정 | 라벨 · auto-merge · 브랜치 보호 | **복사 불가** → `bootstrap-repo.sh` |
 | 5. 자격증명 | App 시크릿 · Claude 토큰 | **복사 불가** → `sync-secrets.sh` |
 
