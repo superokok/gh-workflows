@@ -17,8 +17,13 @@
 - 브랜치: `develop`(통합) / `main`(운영). 작업은 항상 `origin/develop`에서 딴 브랜치에서
 - 검증 커맨드 — 기본값은 Node 기준(`npm run typecheck` / `test` / `lint`)이지만 전부
   커맨드 문자열 입력이라 스택에 매이지 않는다. 툴체인도 선택값이다(아래 `ci.yml`)
-- **웹 프로젝트면** Vercel Preview(커밋 status `Vercel`)를 머지 게이트에 넣고 `preview-smoke`를 쓴다. 앱 전용처럼
-  프리뷰 배포가 없는 프로젝트(예: dotlog)는 `check`·`review`만으로 게이트를 구성한다(`--stack bare`)
+- **머지 게이트는 `check`·`review`다.** Vercel 커밋 status와 `preview-smoke`는 **PR(피처 브랜치)에 프리뷰가
+  배포되는 프로젝트에서만** 게이트에 넣는다. `project-template` 플레이북 §4의 기본값은 `vercel.json`
+  `git.deploymentEnabled`로 **`main`·`develop`만 배포**하는 것이라(dev-depth #213, english-study #6) PR에는
+  Vercel status가 아예 생기지 않는다 — 그걸 필수 체크로 걸면 영구 `Pending`으로 머지가 영원히 막힌다(아래
+  "필수 체크로 무엇을 넣을지"). 그런 프로젝트는 빌드 확인을 `check`에 얹는다(예: `lint: npm run lint && npm run build`
+  — 공유 `check.yml`에 빌드 입력이 없고, job을 나누면 분 과금이 는다). 앱 전용처럼 배포가 아예 없는 프로젝트(예:
+  dotlog)도 `check`·`review`만이다(`--stack bare`)
 - **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
   auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
 - 라벨 `do-not-merge`, `agent` (`review-followup` · `followup-pr`은 워크플로우가 알아서 만든다)
@@ -298,6 +303,9 @@ jobs:
 **`pull_request`로 트리거되는 것만 넣는다.** 워크플로우가 아예 안 돌면 그 체크는 영구
 `Pending`으로 남아 머지를 영원히 막는다(잡이 `skip`되는 건 `success`로 취급돼 무해하다 —
 둘은 다르다).
+
+**PR에 프리뷰가 배포되지 않는 프로젝트(피처 브랜치 배포를 끈 경우)에는 Vercel status도 `smoke`도 넣지 않는다**
+— 트리거는 돌아도 기다릴 배포가 없다.
 
 `preview-smoke.yml`이 그래서 `deployment_status` → `pull_request`로 바뀌었다(2026-09-09).
 배포 URL을 이벤트로 받는 대신 **직접 조회하며 기다리므로** 어떤 경우에도 결론을 낸다 —
