@@ -21,8 +21,8 @@
   배포되는 프로젝트에서만** 게이트에 넣는다. `project-template` 플레이북 §4의 기본값은 `vercel.json`
   `git.deploymentEnabled`로 **`main`·`develop`만 배포**하는 것이라(dev-depth #213, english-study #6) PR에는
   Vercel status가 아예 생기지 않는다 — 그걸 필수 체크로 걸면 영구 `Pending`으로 머지가 영원히 막힌다(아래
-  "필수 체크로 무엇을 넣을지"). 그런 프로젝트는 빌드 확인을 `check`에 얹는다(예: `lint: npm run lint && npm run build`
-  — 공유 `check.yml`에 빌드 입력이 없고, job을 나누면 분 과금이 는다). 앱 전용처럼 배포가 아예 없는 프로젝트(예:
+  "필수 체크로 무엇을 넣을지"). 그런 프로젝트는 빌드 확인을 `check`의 `build` 입력으로 얹는다(`build: npm run build` — 같은
+  job의 마지막 step이라 job이 늘지 않는다). 앱 전용처럼 배포가 아예 없는 프로젝트(예:
   dotlog)도 `check`·`review`만이다(`--stack bare`)
 - **GitHub Pro 이상** — private 저장소의 브랜치 보호/룰셋이 Pro부터다. Free면 네이티브
   auto-merge를 못 써서 이 저장소의 머지 게이트를 쓸 수 없다
@@ -229,16 +229,26 @@ GitHub은 본문 수정·커밋 추가에 알림을 보내지 않는다). 빈도
 name: CI
 on:
   pull_request:
-  push:
-    branches: [develop, main]
+    branches: [develop]   # 통합 브랜치로 가는 PR만 — 릴리스 PR·push는 같은 트리를 다시 검사할 뿐이다
 jobs:
   check:
     uses: superokok/gh-workflows/.github/workflows/check.yml@v1
     secrets: inherit
+    with:
+      build: npm run build   # PR에 Vercel 프리뷰가 없는 프로젝트(main·develop만 배포)면 넘긴다
 ```
 
 `check.yml`의 각 단계는 커맨드 문자열 입력이라, 빈 문자열을 넘기면 그 단계를 건너뛴다
-(Prisma를 안 쓰면 `prepare: ""`, `schema-validate: ""`).
+(Prisma를 안 쓰면 `prepare: ""`, `schema-validate: ""`). `build`는 기본값이 빈 문자열이라
+넘기지 않으면 돌지 않는다.
+
+**검사는 통합 브랜치로 가는 PR에서 한 번만 한다.** WIP 제한 1이라 통합 브랜치에는 PR 하나씩만
+들어가고, PR 체크는 GitHub이 만든 **머지 결과 트리**에서 돈다 — 머지 직후 통합 브랜치 트리는 방금 검사한
+그 트리다. 릴리스 PR(통합 → 운영)의 트리도 통합 브랜치와 같아서(운영 브랜치는 통합 브랜치 머지로만 바뀐다)
+같은 검사를 한 번 더 청구할 뿐이다. 그래서 `pull_request`에 `branches: [develop]`를 건다. 이건 아래
+"워크플로우 수준 `paths:` 필터 금지"와 부딪치지 않는다 — **운영 브랜치에는 필수 체크를 걸지 않으므로**
+(`bootstrap-repo.sh` 기본값) 릴리스 PR에 체크가 안 생겨도 영구 Pending이 되지 않는다. 운영 브랜치에
+필수 체크를 거는 저장소라면 이 필터를 쓰지 않는다.
 
 **툴체인 설치도 같은 규칙이다** — `node-version`/`java-version`이 빈 문자열이면 그 설치를
 건너뛴다. 스택은 프로젝트가 정하고, 이 저장소는 *틀*만 갖는다:
@@ -478,7 +488,8 @@ UNKNOWN이 남아 있는 동안만 최대 6회(10초 간격) 다시 물어본다
   1. **짧은 단계를 별도 job으로 나누지 않는다.** `lint`를 `check` job의 step으로 합친 이유다
      (실측 42 job / 실제 4.3분 / 청구 42분). 병렬로 얻을 게 없으면 같은 job에 붙인다.
   2. **`push:` 트리거를 습관적으로 걸지 않는다.** WIP 제한 1이라 PR과 머지 후 트리는 같다 —
-     같은 검사를 한 번 더 청구할 뿐이다(`self-lint`의 `push: main`을 이래서 뺐다).
+     같은 검사를 한 번 더 청구할 뿐이다(`self-lint`의 `push: main`을 이래서 뺐다). **릴리스 PR도
+     마찬가지다** — `ci.yml`은 `pull_request: branches: [develop]`로 통합 브랜치 PR에서만 돈다(위 `ci.yml`).
   3. **비싼 step은 변경 파일로 건너뛴다.** `claude-review`·`preview-smoke`의
      `skip-paths-regex`가 그것이고, **워크플로우 수준 `paths:` 필터는 절대 쓰지 않는다** —
      job이 아예 안 돌면 check-run이 생성되지 않고, 필수 체크가 "없는" 상태는 `success`가
