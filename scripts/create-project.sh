@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 새 프로젝트를 이 루프에 **한 번에** 올린다 — 파일까지 포함해서.
 #
-# `bootstrap-repo.sh`는 리포 **설정**만 건다(라벨·보호·auto-merge). 파일은 "이 루프를 이미 쓰는
+# `bootstrap-repo.sh`는 리포 **설정**만 건다(라벨·보호·auto-merge·기본 브랜치). 파일은 "이 루프를 이미 쓰는
 # 저장소에서 복사하세요"가 마지막 안내였는데, 복사는 사람이 가장 잘 빠뜨리는 단계이고
 # **빠뜨리면 조용히 안 돈다.** 이 스크립트가 그 구멍을 메운다.
 #
@@ -371,6 +371,12 @@ step "리포 설정 (bootstrap-repo.sh에 위임)"
 BOOTSTRAP_ARGS=("$REPO" --integration "${V[INTEGRATION_BRANCH]}" --production "${V[PRODUCTION_BRANCH]}")
 [ -n "$CHECKS_NOW" ] && BOOTSTRAP_ARGS+=(--checks "$CHECKS_NOW")
 [ "$DRY" = 1 ] && BOOTSTRAP_ARGS+=(--dry-run)
+# 기본 브랜치는 단계로 정한다(bootstrap-repo.sh "기본 브랜치"). 파일은 아직 PR에만 있어 bootstrap이
+# 저장소에서 읽지 못하므로, 그 PR에 실릴 `CLAUDE.md`의 단계를 넘긴다. 새 저장소면 골격의 오픈 전이다.
+_claude_md="$WORK/repo/CLAUDE.md"; [ "${DRY_NO_REPO:-0}" = 1 ] && _claude_md="$SKELETON/CLAUDE.md"
+if grep -q '^\*\*단계: 오픈 전\*\*' "$_claude_md" 2>/dev/null; then BOOTSTRAP_ARGS+=(--stage prelaunch)
+elif grep -q '^\*\*단계: 운영 중\*\*' "$_claude_md" 2>/dev/null; then BOOTSTRAP_ARGS+=(--stage live)
+fi
 bash "$SELF_DIR/bootstrap-repo.sh" "${BOOTSTRAP_ARGS[@]}" | sed 's/^/  /'
 
 step "남은 것 — 사람이 해야 한다"

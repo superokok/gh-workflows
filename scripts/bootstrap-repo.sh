@@ -17,6 +17,8 @@
 #                          (기본 "check / check,review / review")
 #     --no-protect-production  운영 브랜치 보호를 걸지 않는다 (기본은 건다)
 #     --enforce-admins     관리자도 보호를 우회하지 못하게 한다 (아래 주의 참고)
+#     --stage prelaunch|live  단계(오픈 전/운영 중) — 기본 브랜치를 정한다(오픈 전 → 통합,
+#                          운영 중 → 운영 브랜치). 없으면 저장소 CLAUDE.md의 단계 줄을 읽는다
 #     --dry-run            바꾸지 않고 무엇을 할지만 출력
 set -euo pipefail
 
@@ -32,7 +34,7 @@ CHECKS="check / check,review / review"
 #
 # 공통 지침은 "모든 변경은 PR을 거친다 — 직접 커밋 예외는 없다"이고 훅이 그걸 막지만,
 # **훅은 각자의 로컬에만 있다.** 서버에서 강제하는 게 없으면 그 문장은 게이트가 아니다.
-PROTECT_PROD=1; ENFORCE_ADMINS=false; DRY=0
+PROTECT_PROD=1; ENFORCE_ADMINS=false; DRY=0; STAGE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -43,8 +45,11 @@ while [ $# -gt 0 ]; do
     --protect-production)    PROTECT_PROD=1; shift ;;
     --no-protect-production) PROTECT_PROD=0; shift ;;
     --enforce-admins)     ENFORCE_ADMINS=true; shift ;;
+    --stage)
+      case "${2:-}" in prelaunch|live) STAGE="$2" ;; *) echo "--stage는 prelaunch 또는 live: ${2:-}" >&2; exit 2 ;; esac
+      shift 2 ;;
     --dry-run)     DRY=1; shift ;;
-    -h|--help)     sed -n '1,25p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '1,27p' "$0"; exit 0 ;;
     -*) echo "알 수 없는 옵션: $1" >&2; exit 2 ;;
     *)  REPO="$1"; shift ;;
   esac
@@ -120,7 +125,52 @@ else
   warn "$PRODUCTION 브랜치 SHA 조회 실패 — $INTEGRATION 생성을 건너뜁니다."
 fi
 
-# ── 4. 브랜치 보호 ───────────────────────────────────────────────────────────
+# ── 4. 기본 브랜치 ───────────────────────────────────────────────────────────
+# **오픈 전이면 기본 브랜치는 통합 브랜치다.** `workflow_run`(claude-agent·claude-fix·claude-review)과
+# `schedule`(template-sync)은 기본 브랜치의 파일로 돈다. 오픈 전엔 운영 브랜치에 머지하지 않으니,
+# 기본 브랜치가 운영 브랜치면 그 파일들이 영영 들어가지 않아 자동화가 **조용히 안 돈다**(2026-10-28
+# knowlune: `main`에 첫 커밋 둘뿐이라 template-sync가 한 번도 돌지 않았다). 오픈하는 날 운영 브랜치로
+# 되돌린다 — 운영 중엔 자동화 변경도 릴리스를 거쳐 들어가야 한다(공통 지침 "서비스 오픈 전").
+#
+# 단계는 `--stage`로 받거나, 없으면 저장소 `CLAUDE.md`의 단계 줄로 정한다(통합 → 운영 브랜치 순).
+# `create-project.sh`는 파일을 PR로만 올린 채 여기를 부르므로, 그 PR에 실릴 `CLAUDE.md`의 단계를
+# `--stage`로 넘긴다. **둘 다 없으면 바꾸지 않는다** — `CLAUDE.md`가 없거나 단계 줄이 없는 저장소를
+# 새 저장소나 오픈 전으로 추측하면, 이 루프를 안 쓰는 저장소나 운영 중인 저장소의 기본 브랜치를
+# 뒤집는다(dry-run에서 gh-workflows 자신을 `develop`으로 바꾸려 한 것을 보고 추측을 뺐다).
+stage_of() {
+  local ref md
+  if [ -n "$STAGE" ]; then echo "$STAGE"; return; fi
+  for ref in "$INTEGRATION" "$PRODUCTION"; do
+    md=$(gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/CLAUDE.md?ref=$ref" 2>/dev/null) || continue
+    case "$md" in
+      *'**단계: 오픈 전**'*) echo prelaunch; return ;;
+      *'**단계: 운영 중**'*) echo live; return ;;
+    esac
+  done
+  echo unknown
+}
+
+step "기본 브랜치"
+stage=$(stage_of)
+# 404 같은 에러 응답이 값이 되지 않게 브랜치 이름 모양만 받는다
+current_default=$(gh api "repos/$REPO" --jq .default_branch 2>/dev/null) || current_default=""
+case "$current_default" in ''|*[!A-Za-z0-9._/-]*) current_default="?" ;; esac
+case "$stage" in
+  prelaunch) want="$INTEGRATION" ;;
+  live)      want="$PRODUCTION" ;;
+  *)         want="" ;;
+esac
+if [ -z "$want" ]; then
+  warn "단계를 몰라 기본 브랜치($current_default)를 그대로 둡니다 — CLAUDE.md에 단계 줄을 넣고 다시 돌리거나 --stage를 주세요(오픈 전 → $INTEGRATION, 운영 중 → $PRODUCTION)."
+elif [ "$current_default" = "$want" ]; then
+  ok "기본 브랜치 $want 이미 맞음 (단계: $stage)"
+elif run gh api -X PATCH "repos/$REPO" -f "default_branch=$want"; then
+  ok "기본 브랜치 $current_default → $want (단계: $stage)"
+else
+  warn "기본 브랜치 변경 실패 — admin 권한과 $want 브랜치가 있는지 확인하세요."
+fi
+
+# ── 5. 브랜치 보호 ───────────────────────────────────────────────────────────
 # 필수 체크에는 **`pull_request`로 트리거되는 것만** 넣는다. 워크플로우가 아예 안 돌면 그
 # 체크는 생성되지 않고, "없음"은 `success`가 아니라 **영구 Pending**이라 PR을 영원히 막는다
 # (잡이 skip되는 건 success 취급이라 무해하다 — 둘은 다르다).
@@ -181,7 +231,7 @@ else
   say "  ⚠️ 그러면 이 브랜치는 직접 push·force push·삭제가 전부 가능하다 — 릴리스 게이트가 없다."
 fi
 
-# ── 5. 사람이 해야 하는 것 ───────────────────────────────────────────────────
+# ── 6. 사람이 해야 하는 것 ───────────────────────────────────────────────────
 step "여기서 끝나지 않는다 — 직접 하셔야 하는 것"
 cat <<EOF
   1) Claude GitHub App + 토큰
@@ -210,6 +260,8 @@ cat <<EOF
 
   5) Vercel: 프로젝트 연결, $INTEGRATION → staging 도메인,
        Deployment Protection → Protection Bypass for Automation (위 3번 시크릿)
+       ※ Vercel은 가져올 때 **GitHub 기본 브랜치**를 Production으로 잡는다. 위에서 기본 브랜치가
+          $INTEGRATION이 됐으면 Settings → Environments → Production의 Branch Tracking을 $PRODUCTION으로 바꾼다.
 
   6) 파일은 이 스크립트가 건드리지 않습니다 — create-project.sh를 썼다면 이미 깔려 있다.
      bootstrap-repo.sh만 단독으로 썼다면 이 루프를 이미 쓰는 저장소에서 가져오세요:
@@ -221,5 +273,5 @@ cat <<EOF
 EOF
 
 step "확인"
-say "  gh repo view $REPO --json deleteBranchOnMerge,autoMergeAllowed"
+say "  gh repo view $REPO --json deleteBranchOnMerge,autoMergeAllowed,defaultBranchRef"
 say "  gh api repos/$REPO/branches/$INTEGRATION/protection --jq '.required_status_checks.contexts'"
