@@ -53,7 +53,7 @@ scripts/create-project.sh <owner/repo> --stack next-vercel --set NOTIFY_HANDLE=<
 | 루프 로직 | `superokok/gh-workflows` | `uses:`로 **참조** — 복사본이 없다 |
 | 호출부·CLAUDE.md 골격 | 이 저장소 `scripts/skeleton/` | **한 번 렌더**, 그 뒤로는 프로젝트가 소유 |
 | 훅·공통 지침 | `superokok/project-template`의 `common/` | **계속 동기화**(`template-sync.yml`) |
-| 리포 설정 | `scripts/bootstrap-repo.sh` | 라벨·보호·auto-merge |
+| 리포 설정 | `scripts/bootstrap-repo.sh` | 라벨·보호·auto-merge·기본 브랜치 |
 
 **호출부가 이 저장소에 있는 이유**: 재사용 워크플로우가 입력을 하나 늘리면 호출부 모양도 같이
 바뀐다. 같은 저장소에 두면 그 둘을 한 PR에서 맞출 수 있다. 반대로 훅·공통 지침은 로직과
@@ -81,7 +81,7 @@ scripts/create-project.sh <owner/repo> --stack next-vercel --set NOTIFY_HANDLE=<
 | 1. 로직 | 여기 재사용 워크플로우 8개 | `uses:`로 부르면 끝 |
 | 2. 호출부 | 소비 프로젝트 `.github/workflows/` | **복사 + 조정** (트리거·권한·`risk-paths`는 프로젝트마다 다르다) |
 | 3. 에이전트 | `.claude/settings.json` · `hooks/**` · `skills/steward` · 훅 테스트 | **정본 `project-template`의 `common/`에서 복사 + 매주 동기화**(`create-project.sh`가 처음 한 번 깔고, 이후 `template-sync`). settings.json(훅 등록)도 2026-10-19부터 여기 포함 — 예전엔 이 저장소 스켈레톤이 한 번만 깔아서, 공통 훅이 늘어도 기존 저장소 등록이 안 따라왔다. 훅 테스트(`scripts/hooks/run-tests.sh`)는 그 저장소의 테스트 명령 안에서 돌게 감싼다 — 안 감싸면 CI에서 **조용히 안 돈다** |
-| 4. 리포 설정 | 라벨 · auto-merge · 브랜치 보호 | **복사 불가** → `bootstrap-repo.sh` |
+| 4. 리포 설정 | 라벨 · auto-merge · 기본 브랜치 · 브랜치 보호 | **복사 불가** → `bootstrap-repo.sh` |
 | 5. 자격증명 | App 시크릿 · Claude 토큰 | **복사 불가** → `sync-secrets.sh` |
 
 ```bash
