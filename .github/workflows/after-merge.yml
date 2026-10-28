@@ -184,6 +184,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BODY: ${{ github.event.pull_request.body }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
         run: |
           set -euo pipefail
 
@@ -208,7 +209,15 @@ jobs:
           # 그런 식으로 포함했다) 이 PR 자신의 번호를 담고 있으면, 그 번호가 OPEN 이슈처럼
           # 같이 닫힐 수 있었다. 그래서 자기 자신 번호는 먼저 걸러내고, REST API로 PR
           # 여부와 상태(open)를 라벨과 함께 한 번에 확인한다.
-          if [ -z "$issues" ]; then
+          #
+          # **봇(에이전트)이 연 PR에서만 본다.** 이 폴백은 에이전트가 키워드를 빼먹는 경우를
+          # 메우려는 것인데, 사람 PR까지 적용하니 맥락으로 인용한 번호가 그대로 닫혔다 —
+          # project-template #42가 "방치된 후속 이슈 7건"을 설명하려고 본문에 `#14, #19, …`를
+          # 나열했고, 머지되자 7건이 전부 COMPLETED로 닫혔다(2026-10-28). 라벨·상태 조건은 그
+          # 이슈들이 정확히 "열린 agent 이슈"라 막지 못했다. 사람은 닫을 이슈에 키워드를 쓴다.
+          if [ -z "$issues" ] && [ "$AUTHOR_TYPE" != "Bot" ]; then
+            echo "키워드 없음 — 사람이 연 PR이라 맨몸 #N은 닫지 않는다"
+          elif [ -z "$issues" ]; then
             bare=$(printf '%s' "$BODY" | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
             for i in $bare; do
               if [ "$i" = "$PR" ]; then
